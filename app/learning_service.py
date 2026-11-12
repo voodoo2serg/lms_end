@@ -172,18 +172,27 @@ def queue_completion(db, learner, course, evidence, actor="system"):
     old = db.scalar(select(OutboundEvent).where(OutboundEvent.dedupe_key == key))
     if old:
         return old
+    course_id = course.id
+    commerce_product_id = course.commerce_product_id or course.product_id
+    voronka_profile_id = learner.voronka_profile_id or learner.profile_id
     row = OutboundEvent(
         id=uid(), kind="learning.completed", dedupe_key=key,
         payload={
             "schema_version": 1,
             "event_id": key,
+            "idempotency_key": key,
+            "type": "learning.completed",
             "kind": "learning.completed",
             "keycloak_sub": learner.subject,
-            "voronka_profile_id": learner.voronka_profile_id or learner.profile_id,
-            "course_id": course.id,
-            "commerce_product_id": course.commerce_product_id or course.product_id,
+            "email": learner.email or "",
+            "voronka_profile_id": voronka_profile_id,
+            "course_id": course_id,
+            "commerce_product_id": commerce_product_id,
+            # Alias voronka completion dual-read accepts as resource marker.
+            "resource": course_id,
             "evidence": evidence,
             "actor": actor,
+            "source": "lms_end",
         })
     db.add(row)
     enqueue(db, "outbound", row.id, "outbound:" + row.id)
@@ -206,15 +215,33 @@ def deliver_outbound(job):
     secret = (os.getenv("VORONKA_LMS_HMAC_SECRET") or os.getenv("VORONKA_LMS_TOKEN") or "").strip()
     if not url or not secret:
         raise IntegrationError("voronka_completion_unconfigured", False)
+    # Dual-emit aliases voronka dual-reads (course_id/resource, type/kind, event_id/idempotency_key).
+    course_id = payload.get("course_id") or payload.get("resource") or ""
+    payload.setdefault("type", payload.get("kind") or "learning.completed")
+    payload.setdefault("kind", payload.get("type") or "learning.completed")
+    payload.setdefault("idempotency_key", payload.get("event_id") or event_id)
+    payload.setdefault("event_id", payload.get("idempotency_key") or event_id)
+    if course_id:
+        payload.setdefault("resource", course_id)
+        payload.setdefault("course_id", course_id)
+    payload.setdefault("source", "lms_end")
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    ts = str(int(now().timestamp()))
+    digest = hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    sig = "sha256=" + digest
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + secret,
+        "X-Lms-Timestamp": ts,
+        "X-Lms-Signature": sig,
+        "X-Lms-Event-Id": event_id,
+        "X-Voronka-Timestamp": ts,
+        "X-Voronka-Signature": sig,
+        "X-Voronka-Event-Id": event_id,
+    }
     try:
         with httpx.Client(timeout=15) as client:
-            response = client.post(url, content=body, headers={
-                "Content-Type": "application/json",
-                "X-Lms-Signature": "sha256=" + sig,
-                "X-Lms-Event-Id": event_id,
-            })
+            response = client.post(url, content=body, headers=headers)
     except httpx.HTTPError as exc:
         # DNS / connect / timeout — retryable like other LMS HTTP adapters.
         raise IntegrationError("voronka_completion_transport", True) from exc

@@ -232,9 +232,111 @@ def test_hmac_auth_and_completion_outbound(lms, monkeypatch):
         assert job is not None
         outbound = db.scalar(select(OutboundEvent))
         assert outbound.kind == "learning.completed"
+        assert outbound.payload["source"] == "lms_end"
+        assert outbound.payload["resource"] == "pr"
+        assert outbound.payload["type"] == outbound.payload["kind"] == "learning.completed"
+        assert outbound.payload["idempotency_key"] == outbound.payload["event_id"]
+        assert outbound.payload.get("email")
+    captured = {}
+
+    def fake_post(url, content=None, headers=None, **kwargs):
+        captured["url"] = url
+        captured["body"] = content
+        captured["headers"] = headers
+        return SimpleNamespace(status_code=200)
+
     with patch("httpx.Client") as client_cls:
         instance = client_cls.return_value.__enter__.return_value
-        instance.post.return_value.status_code = 200
+        instance.post.side_effect = fake_post
         learning_service.deliver_outbound(job)
+    assert captured["headers"]["X-Lms-Signature"].startswith("sha256=")
+    assert captured["headers"]["X-Voronka-Signature"] == captured["headers"]["X-Lms-Signature"]
+    assert captured["headers"]["X-Lms-Timestamp"] == captured["headers"]["X-Voronka-Timestamp"]
+    assert captured["headers"]["Authorization"].startswith("Bearer ")
+    ts = captured["headers"]["X-Lms-Timestamp"]
+    expected = hmac.new(b"s" * 40, f"{ts}.".encode() + captured["body"], hashlib.sha256).hexdigest()
+    assert captured["headers"]["X-Lms-Signature"] == "sha256=" + expected
     with s.db() as db:
         assert db.scalar(select(OutboundEvent)).status == "delivered"
+
+
+def _ts_hmac_headers(secret: bytes | str, raw: bytes, *, prefix="X-Voronka"):
+    secret_b = secret if isinstance(secret, (bytes, bytearray)) else str(secret).encode()
+    ts = str(int(time.time()))
+    dig = hmac.new(secret_b, f"{ts}.".encode() + raw, hashlib.sha256).hexdigest()
+    return {
+        "Content-Type": "application/json",
+        f"{prefix}-Timestamp": ts,
+        f"{prefix}-Signature": "sha256=" + dig,
+    }
+
+
+def test_enrollment_accepts_voronka_grant_shape_and_timestamp_hmac(lms, monkeypatch):
+    """Wire v1: voronka EnrollmentBody (action=grant, schema_version string, extras) + ts HMAC."""
+    s = lms
+    monkeypatch.delenv("VORONKA_LMS_TOKEN", raising=False)
+    payload = {
+        "schema_version": "1",
+        "type": "enrollment.desired",
+        "kind": "enrollment.desired",
+        "event_id": "enrollment.desired:grant-aa:r1",
+        "idempotency_key": "enrollment.desired:grant-aa:r1",
+        "action": "grant",
+        "keycloak_sub": "subject-one",
+        "email": "anna@example.ru",
+        "voronka_profile_id": "vp-1",
+        "name": "Анна",
+        "course_id": "pr",
+        "commerce_product_id": "prod-1",
+        "capability": "course.view",
+        "resource": "pr",
+        "revoke": False,
+        "revision": 1,
+        "min_paid_percent": 100,
+        "source": "voronka",
+        "grant_id": "grant-aa",
+        "order_id": "ord-1",
+    }
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    headers = _ts_hmac_headers(b"s" * 40, raw, prefix="X-Voronka")
+    r = s.client.post("/api/integrations/voronka/enrollment", content=raw, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["desired"] is True and r.json()["idempotent"] is False
+    with s.db() as db:
+        grant = db.get(AccessGrantRow, "enrollment.desired:grant-aa:r1")
+        assert grant is not None and grant.revoked is False
+        assert db.scalar(select(Enrollment)).desired is True
+
+
+def test_enrollment_accepts_legacy_resource_revoke_and_x_lms_hmac(lms, monkeypatch):
+    """Older voronka shape: resource/kind/revoke without action/course_id; X-Lms-* HMAC."""
+    s = lms
+    assert post_enrollment(s.client, base_body()).status_code == 200
+    monkeypatch.delenv("VORONKA_LMS_TOKEN", raising=False)
+    payload = {
+        "event_id": "evt-legacy-revoke-1",
+        "kind": "enrollment.revoked",
+        "resource": "pr",
+        "revoke": True,
+        "keycloak_sub": "subject-one",
+        "capability": "course.view",
+        "revision": 2,
+    }
+    raw = json.dumps(payload).encode()
+    headers = _ts_hmac_headers(b"s" * 40, raw, prefix="X-Lms")
+    r = s.client.post("/api/integrations/voronka/enrollment", content=raw, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["desired"] is False
+    with s.db() as db:
+        assert db.scalar(select(Enrollment)).desired is False
+
+
+def test_enrollment_accepts_grant_without_keycloak_sub_via_email(lms):
+    payload = base_body(event_id="evt-email-sub-1", action="grant")
+    del payload["keycloak_sub"]
+    r = post_enrollment(lms.client, payload)
+    assert r.status_code == 200, r.text
+    with lms.db() as db:
+        learner = db.scalar(select(Learner).where(Learner.email == "anna@example.ru"))
+        assert learner is not None
+        assert learner.subject.startswith("email:")

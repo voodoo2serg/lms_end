@@ -1,0 +1,16 @@
+import {mkdir,cp,rm,writeFile,readFile,symlink} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import path from 'node:path';
+import {build} from 'esbuild';
+const root=process.cwd(),temp=path.join(root,'.sites-build');
+await rm(temp,{recursive:true,force:true});await mkdir(temp,{recursive:true});
+await cp('src',path.join(temp,'src'),{recursive:true});await rm(path.join(temp,'src/app/api'),{recursive:true,force:true});
+await cp('public',path.join(temp,'public'),{recursive:true});
+for(const file of ['package.json','tsconfig.json','postcss.config.mjs','next-env.d.ts'])await cp(file,path.join(temp,file));
+await symlink(path.join(root,'node_modules'),path.join(temp,'node_modules'),'dir');
+await writeFile(path.join(temp,'next.config.ts'),"export default {output:'export',images:{unoptimized:true},typescript:{ignoreBuildErrors:false}};\n");
+const result=spawnSync(process.execPath,[path.join(root,'node_modules/next/dist/bin/next'),'build','--webpack'],{cwd:temp,stdio:'inherit',env:{...process.env,NEXT_TELEMETRY_DISABLED:'1'}});if(result.status!==0)process.exit(result.status||1);
+await rm('dist',{recursive:true,force:true});await mkdir('dist/server',{recursive:true});await cp(path.join(temp,'out'),'dist/client',{recursive:true});
+await build({entryPoints:['worker/index.ts'],outfile:'dist/server/index.js',bundle:true,format:'esm',platform:'browser',target:'es2022'});
+await writeFile('dist/server/wrangler.json',JSON.stringify({name:'solo-pr-community',main:'index.js',compatibility_date:'2026-11-01',assets:{directory:'../client',binding:'ASSETS'},d1_databases:[{binding:'DB',database_name:'solo-pr-community',database_id:'00000000-0000-0000-0000-000000000000'}]},null,2));
+console.log('Worker and static assets ready. Node/VPS source preserved.');

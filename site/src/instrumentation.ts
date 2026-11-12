@@ -1,0 +1,1 @@
+export async function register(){if(process.env.NEXT_RUNTIME==='nodejs'&&process.env.LEARNING_API_URL){const {flushLeads}=await import('./lib/server/learning');let busy=false;const tick=async()=>{if(busy)return;busy=true;try{await flushLeads();}finally{busy=false;}};setInterval(()=>void tick(),30000).unref();void tick();}}

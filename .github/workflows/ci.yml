@@ -1,0 +1,127 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite://
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q app migrations tests
+      - run: python -m pytest -q
+      - run: cp .env.example .env
+      - run: docker compose --env-file .env.example config --quiet
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: funnel
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: funnel
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U funnel -d funnel"
+          --health-interval 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://funnel:test@localhost:5432/funnel
+      OWNER_TELEGRAM_ID: 123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: alembic upgrade head
+      - run: alembic downgrade base
+      - run: alembic upgrade head
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: funnel
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: funnel
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U funnel -d funnel"
+          --health-interval 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://funnel:test@localhost:5432/funnel
+      TEST_DATABASE_URL: postgresql+psycopg://funnel:test@localhost:5432/funnel
+      REDIS_URL: redis://localhost:6379/0
+      OWNER_TELEGRAM_ID: 123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -r requirements.txt
+      - run: alembic upgrade head
+      - run: python -m pytest -q tests/test_operational.py tests/test_crm.py tests/test_learning.py
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t voronka:test .
+      - run: docker run --rm --entrypoint ffprobe voronka:test -version
+      - run: docker run --rm -v voronka-ci-media:/data/media --entrypoint python voronka:test -c "from pathlib import Path; p=Path('/data/media/write-test'); p.write_text('ok'); p.unlink()"
+  browser:
+    runs-on: ubuntu-latest
+    env:
+      RUN_BROWSER: '1'
+      DATABASE_URL: sqlite://
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix web
+      - run: npm run --prefix web build
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -q tests/test_editor_browser.py tests/test_crm_browser.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix web
+      - run: npm run --prefix web build
+      - run: npm run --prefix web typecheck
+
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix site --legacy-peer-deps
+      - run: npm run --prefix site typecheck
+      - run: npm run --prefix site build:vps
+      - run: npm run --prefix site test:integration
+      - run: node site/tests/learning.integration.mjs

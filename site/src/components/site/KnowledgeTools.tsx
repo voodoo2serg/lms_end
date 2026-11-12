@@ -1,0 +1,10 @@
+'use client';
+import {useState} from 'react';
+import {ArrowUpRight} from 'lucide-react';
+import {SiteLink} from '@/lib/router';
+const groups=[
+ {id:'position',name:'Позиция и влияние',title:'Объясните свою ценность',text:'Переведите опыт в понятное заказчику предложение.',items:['Карта вашей экспертизы','Ценностное предложение','Аргументы для руководителя'],result:'На выходе — предложение с ясной задачей и вашим вкладом.'},
+ {id:'business',name:'Задача бизнеса',title:'Соберите логику решения',text:'Определите, чьё решение важно и что должно измениться.',items:['Карта заинтересованных сторон','Гипотеза влияния','План оценки результата'],result:'На выходе — связь между действиями коммуникационной команды и целью бизнеса.'},
+ {id:'data',name:'Данные и ИИ',title:'Усильте собственную практику',text:'Освойте инструменты, которые помогают исследовать, проверять и создавать.',items:['Карта открытых источников','Проверка фактов и выводов ИИ','Рабочая база отраслевых знаний'],result:'На выходе — проверенный инструмент для вашей текущей задачи.'}
+];
+export default function KnowledgeTools(){const [active,setActive]=useState(0);const g=groups[active];return <section className="knowledge-tools"><div className="section-heading"><div><p className="kicker">От знания к рабочему результату</p><h2>Что можно взять в практику</h2></div><p>Выберите направление: покажем, над чем работать и что подготовить.</p></div><div className="knowledge-layout"><div className="knowledge-tabs" role="tablist" aria-label="Направления практики">{groups.map((v,i)=><button key={v.id} id={'tool-tab-'+v.id} role="tab" aria-selected={i===active} aria-controls="tool-panel" onClick={()=>setActive(i)}>{v.name}<span>↗</span></button>)}</div><div className="knowledge-panel" id="tool-panel" role="tabpanel" aria-labelledby={'tool-tab-'+g.id}><h3>{g.title}</h3><p>{g.text}</p><ol>{g.items.map(t=><li key={t}>{t}</li>)}</ol><p className="knowledge-result">{g.result}</p><SiteLink to="/courses/interests" className="text-link">Подобрать программу <ArrowUpRight size={16}/></SiteLink></div></div></section>}

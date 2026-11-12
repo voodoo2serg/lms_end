@@ -1,0 +1,68 @@
+# Merge with compose.yaml. BBB and RAGA are separate installations.
+services:
+  learning-worker:
+    build: .
+    env_file: .env
+    command: python -m app.learning_service
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    mem_limit: 768m
+  learning-db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LEARNING_DB_ROOT_PASSWORD:?configure learning database password}
+      OPENOLAT_DB_PASSWORD: ${OPENOLAT_DB_PASSWORD:?configure OpenOlat database password}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?configure Keycloak database password}
+    volumes:
+      - learning_pg:/var/lib/postgresql
+      - ./deploy/platform/init-databases.sh:/docker-entrypoint-initdb.d/10-project.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+  keycloak:
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION:?pin a supported Keycloak release}
+    command: start --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://learning-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: https://${AUTH_DOMAIN}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    volumes:
+      - ./deploy/generated/realm.json:/opt/keycloak/data/import/solo-pr.json:ro
+    ports: ["127.0.0.1:18081:8080"]
+    depends_on:
+      learning-db: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 2g
+  openolat:
+    build:
+      context: deploy/openolat
+      args:
+        OPENOLAT_WAR_URL: ${OPENOLAT_WAR_URL:?set official supported WAR URL}
+        OPENOLAT_WAR_SHA256: ${OPENOLAT_WAR_SHA256:?verify WAR checksum}
+    environment:
+      OPENOLAT_DOMAIN: ${LEARN_DOMAIN}
+      OPENOLAT_DB_PASSWORD: ${OPENOLAT_DB_PASSWORD}
+      OPENOLAT_OIDC_SECRET: ${OPENOLAT_OIDC_SECRET}
+      AUTH_DOMAIN: ${AUTH_DOMAIN}
+      JAVA_OPTS: -Xms512m -Xmx3g -Dspring.profiles.active=solo -Duser.timezone=Europe/Moscow -Djava.awt.headless=true
+    volumes:
+      - openolat_data:/data/openolat
+    ports: ["127.0.0.1:18082:8080"]
+    depends_on:
+      learning-db: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 4g
+volumes:
+  learning_pg:
+  openolat_data:

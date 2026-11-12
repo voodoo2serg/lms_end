@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+data
+.env*
+qa
+*.log
+
+.sites-build
+dist
+.wrangler
+.sites-runtime
+outputs

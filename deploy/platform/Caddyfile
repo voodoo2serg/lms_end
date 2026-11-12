@@ -1,0 +1,11 @@
+# Server B. Server A serves the existing site and proxies /crm, /api/crm and /api to B over a protected network.
+{$AUTH_DOMAIN} {
+    reverse_proxy 127.0.0.1:18081
+}
+{$LEARN_DOMAIN} {
+    reverse_proxy 127.0.0.1:18082
+}
+{$API_DOMAIN} {
+    reverse_proxy 127.0.0.1:18080
+    header Referrer-Policy no-referrer
+}

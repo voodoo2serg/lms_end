@@ -1,0 +1,12 @@
+import {sqliteTable,text,integer,blob,primaryKey} from 'drizzle-orm/sqlite-core';
+export const users=sqliteTable('users',{id:text().primaryKey(),email:text().notNull().unique(),username:text().notNull().unique(),name:text().notNull(),about:text().notNull().default(''),password:text().notNull(),role:text().notNull().default('member'),club:integer().notNull().default(0),theme:text().notNull().default('system'),avatar:text(),created:text().notNull(),consent:text().notNull()});
+export const sessions=sqliteTable('sessions',{token:text().primaryKey(),user_id:text().notNull().references(()=>users.id,{onDelete:'cascade'}),expires:integer().notNull()});
+export const saved=sqliteTable('saved',{user_id:text().notNull().references(()=>users.id,{onDelete:'cascade'}),material_id:text().notNull(),done:integer().notNull().default(0)},t=>[primaryKey({columns:[t.user_id,t.material_id]})]);
+export const attendance=sqliteTable('attendance',{user_id:text().notNull().references(()=>users.id,{onDelete:'cascade'}),event_id:text().notNull()},t=>[primaryKey({columns:[t.user_id,t.event_id]})]);
+export const limits=sqliteTable('limits',{key:text().primaryKey(),count:integer().notNull(),expires:integer().notNull()});
+export const requests=sqliteTable('requests',{id:text().primaryKey(),user_id:text().notNull().references(()=>users.id,{onDelete:'cascade'}),kind:text().notNull(),message:text().notNull(),created:text().notNull()});
+export const leads=sqliteTable('leads',{contact_type:text().notNull().default('email'),contact:text().notNull().default(''),id:text().primaryKey(),name:text().notNull(),email:text().notNull(),kind:text().notNull(),service:text().notNull(),message:text().notNull(),consent:text().notNull(),ads_consent:integer().notNull().default(0),created:text().notNull()});
+export const purchases=sqliteTable('purchases',{user_id:text().notNull().references(()=>users.id,{onDelete:'cascade'}),course_id:text().notNull(),purchased:text().notNull()},t=>[primaryKey({columns:[t.user_id,t.course_id]})]);
+export const documents=sqliteTable('documents',{id:text().primaryKey(),user_id:text().notNull().references(()=>users.id,{onDelete:'cascade'}),title:text().notNull(),url:text().notNull(),created:text().notNull()});
+export const content=sqliteTable('site_content',{id:text().primaryKey(),json:text().notNull()});
+export const audit=sqliteTable('audit',{id:integer().primaryKey({autoIncrement:true}),actor:text().notNull(),action:text().notNull(),created:text().notNull()});

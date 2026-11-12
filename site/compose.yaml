@@ -1,0 +1,14 @@
+services:
+  community:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /app/data
+      COOKIE_SECURE: "true"
+    volumes:
+      - community-data:/app/data
+volumes:
+  community-data:

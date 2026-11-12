@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+__pycache__
+.pytest_cache
+backups
+data
+web/node_modules
+web/.next
+web/out
+app/crm_static
+.venv
+site
+
+.test-tmp
+deploy/generated

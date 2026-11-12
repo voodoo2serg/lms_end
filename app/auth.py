@@ -1,0 +1,100 @@
+import hashlib, hmac, json, os, secrets, time
+from urllib.parse import parse_qsl
+import redis
+from fastapi import Cookie, Header, HTTPException
+from app.db import Session, Admin
+
+cache = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+CRM_SESSION_COOKIE = "crm_session"
+
+def validate_init_data(raw, token, current_time=None):
+    pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=True)
+    if len({k for k, _ in pairs}) != len(pairs):
+        raise ValueError("duplicate fields")
+    data = dict(pairs)
+    signature = data.pop("hash")
+    check = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+    key = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    expected = hmac.new(key, check.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise ValueError("invalid signature")
+    age = (current_time or time.time()) - int(data["auth_date"])
+    if age < -30 or age > 300:
+        raise ValueError("expired")
+    user = json.loads(data["user"])
+    if not isinstance(user.get("id"), int) or isinstance(user["id"], bool):
+        raise ValueError("invalid user")
+    return user["id"]
+
+def session_key(token):
+    return "session:" + hashlib.sha256(token.encode()).hexdigest()
+
+def issue_session(admin_id):
+    token = secrets.token_urlsafe(32)
+    key = session_key(token)
+    cache.setex(key, 8 * 3600, str(admin_id))
+    cache.sadd(f"admin-sessions:{admin_id}", key)
+    cache.expire(f"admin-sessions:{admin_id}", 8 * 3600)
+    return token
+
+def revoke_sessions(admin_id):
+    for key in cache.smembers(f"admin-sessions:{admin_id}"):
+        cache.delete(key)
+    cache.delete(f"admin-sessions:{admin_id}")
+
+def read_session_token(authorization: str = "", cookie: str | None = None):
+    if authorization.startswith("Bearer ") and authorization[7:]:
+        return authorization[7:]
+    if cookie:
+        return cookie
+    return ""
+
+def actor(
+    authorization: str = Header(default=""),
+    crm_session: str | None = Cookie(default=None, alias=CRM_SESSION_COOKIE),
+):
+    # Prefer Authorization Bearer (Telegram Mini App + CRM clients); fall back to HttpOnly CRM cookie.
+    token = read_session_token(authorization, crm_session)
+    if os.getenv("OIDC_ISSUER") and token.count(".") == 2:
+        from app.learning_auth import claims
+        return oidc_admin(claims("Bearer " + token))
+    if not token:
+        raise HTTPException(401, "Откройте панель из Telegram")
+    value = cache.get(session_key(token))
+    if not value:
+        raise HTTPException(401, "Сессия истекла")
+    with Session() as db:
+        admin = db.get(Admin, int(value))
+        if not admin or not admin.active:
+            raise HTTPException(403, "Доступ отозван")
+        from app.crm_models import Account, Membership
+        from app.db import Connection
+        from sqlalchemy import select
+        if admin.role != "owner" and db.scalar(select(Account.id).where(Account.admin_id == admin.telegram_id)):
+            projects = select(Membership.project_id).where(Membership.admin_id == admin.telegram_id)
+            admin.connection_ids = list(db.scalars(select(Connection.id).where(Connection.project_id.in_(projects))))
+        return admin
+
+def oidc_admin(data):
+    """Explicit subject binding; never infer a staff role from an email address."""
+    mapping = json.loads(os.getenv("OIDC_STAFF_MAP", "{}"))
+    aid = mapping.get(data["sub"])
+    if aid is None:
+        raise HTTPException(403, "Аккаунт сотрудника не привязан к CRM")
+    roles = data.get("resource_access", {}).get(os.getenv("OIDC_AUDIENCE", "solo-api"), {}).get("roles", [])
+    with Session() as db:
+        admin = db.get(Admin, int(aid))
+        if not admin or not admin.active or admin.role not in roles:
+            raise HTTPException(403, "Доступ сотрудника отозван")
+        return admin
+
+def permit(admin, connections=(), edit=False, owner=False):
+    if owner and admin.role != "owner":
+        raise HTTPException(403, "Требуется владелец")
+    if edit and admin.role not in ("owner", "editor"):
+        raise HTTPException(403, "Нет права редактирования")
+    if admin.role != "owner" and not set(connections).issubset(set(admin.connection_ids)):
+        raise HTTPException(403, "Площадка недоступна")
+
+def allowed(admin, connection_id):
+    return admin.role == "owner" or connection_id in admin.connection_ids

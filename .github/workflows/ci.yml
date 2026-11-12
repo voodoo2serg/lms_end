@@ -38,16 +38,17 @@ jobs:
       - run: |
           cp .env.example .env
           # Minimal pins so compose.lms.yaml config validates without real WAR/Keycloak pulls.
-          sed -i 's/^KEYCLOAK_VERSION=.*/KEYCLOAK_VERSION=26.0.0/' .env
-          sed -i 's/^OPENOLAT_WAR_URL=.*/OPENOLAT_WAR_URL=https://example.invalid\/openolat.war/' .env
-          sed -i 's/^OPENOLAT_WAR_SHA256=.*/OPENOLAT_WAR_SHA256=deadbeef/' .env
-          sed -i 's/^LEARNING_DB_ROOT_PASSWORD=.*/LEARNING_DB_ROOT_PASSWORD=test/' .env
-          sed -i 's/^OPENOLAT_DB_PASSWORD=.*/OPENOLAT_DB_PASSWORD=test/' .env
-          sed -i 's/^KEYCLOAK_DB_PASSWORD=.*/KEYCLOAK_DB_PASSWORD=test/' .env
-          sed -i 's/^KEYCLOAK_ADMIN_PASSWORD=.*/KEYCLOAK_ADMIN_PASSWORD=test/' .env
-          sed -i 's/^OPENOLAT_OIDC_SECRET=.*/OPENOLAT_OIDC_SECRET=testsecret/' .env
-          sed -i 's/^AUTH_DOMAIN=.*/AUTH_DOMAIN=auth.example.ru/' .env
-          sed -i 's/^LEARN_DOMAIN=.*/LEARN_DOMAIN=learn.example.ru/' .env
+          # Use '|' delimiters — replacement URLs contain '/'.
+          sed -i 's|^KEYCLOAK_VERSION=.*|KEYCLOAK_VERSION=26.0.0|' .env
+          sed -i 's|^OPENOLAT_WAR_URL=.*|OPENOLAT_WAR_URL=https://example.invalid/openolat.war|' .env
+          sed -i 's|^OPENOLAT_WAR_SHA256=.*|OPENOLAT_WAR_SHA256=deadbeef|' .env
+          sed -i 's|^LEARNING_DB_ROOT_PASSWORD=.*|LEARNING_DB_ROOT_PASSWORD=test|' .env
+          sed -i 's|^OPENOLAT_DB_PASSWORD=.*|OPENOLAT_DB_PASSWORD=test|' .env
+          sed -i 's|^KEYCLOAK_DB_PASSWORD=.*|KEYCLOAK_DB_PASSWORD=test|' .env
+          sed -i 's|^KEYCLOAK_ADMIN_PASSWORD=.*|KEYCLOAK_ADMIN_PASSWORD=test|' .env
+          sed -i 's|^OPENOLAT_OIDC_SECRET=.*|OPENOLAT_OIDC_SECRET=testsecret|' .env
+          sed -i 's|^AUTH_DOMAIN=.*|AUTH_DOMAIN=auth.example.ru|' .env
+          sed -i 's|^LEARN_DOMAIN=.*|LEARN_DOMAIN=learn.example.ru|' .env
       - run: docker compose -f compose.lms.yaml --env-file .env config --quiet
 
   migrations:

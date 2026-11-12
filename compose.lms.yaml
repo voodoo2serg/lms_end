@@ -1,10 +1,12 @@
 # LMS-only home-server stack (LMS-5). No Voronka CRM db/Redis/worker required for learning.
 # Usage:
-#   cp .env.lms.example .env   # or merge LMS_* keys into .env
+#   python3 -m scripts.bootstrap_lms --domain solo-pr.ru \
+#     --keycloak-version VERIFIED --openolat-war-url https://... --openolat-war-sha256 ...
+#   # writes .env (if missing) + deploy/generated/realm.json (required Keycloak import mount)
 #   docker compose -f compose.lms.yaml config --quiet
 #   docker compose -f compose.lms.yaml up -d --build
 #
-# BBB remains external (server C). Edge proxy: deploy/lms/nginx-lms.conf or Caddy snippet below.
+# BBB remains external (server C). Edge proxy: deploy/lms/nginx-lms.conf.
 #
 # Resource sizing (documented):
 #   OpenOlat + Keycloak + learning-db + thin adapter: ~4 vCPU / 8–12 GB RAM / 40+ GB disk

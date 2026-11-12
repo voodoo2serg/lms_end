@@ -40,11 +40,16 @@ CMS и старый community-кабинет пока используют су�
 ```bash
 git clone https://github.com/voodoo2serg/lms_end.git
 cd lms_end
-# Заполните .env: ACCESS_AUTHORITY=external, LEARNING_DB_*, KEYCLOAK_*, OPENOLAT_*, VORONKA_LMS_TOKEN, PLATFORM_PROJECT_ID, …
+python3 -m scripts.bootstrap_lms --domain solo-pr.ru \
+  --keycloak-version VERIFIED_VERSION \
+  --openolat-war-url https://OFFICIAL_RELEASE_URL/openolat.war \
+  --openolat-war-sha256 VERIFIED_SHA256_64CHARS
+# Creates .env (if missing) and deploy/generated/realm.json before Keycloak starts.
 docker compose -f compose.lms.yaml config --quiet
 docker compose -f compose.lms.yaml up -d --build
 ```
 
+`ACCESS_AUTHORITY=external` by default. Set `VORONKA_LMS_TOKEN` / completion URL after bootstrap.  
 Edge: [`deploy/lms/nginx-lms.conf`](deploy/lms/nginx-lms.conf). Backup: [`scripts/backup_lms.sh`](scripts/backup_lms.sh) + [`docs/LMS_BACKUP.md`](docs/LMS_BACKUP.md).
 
 ### Legacy full platform (frozen)

@@ -9,16 +9,17 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import fakeredis
+import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
-from app.db import Base, Event, now
+from app.db import Base, now
 from app import learning_models  # noqa: F401 — register tables
 from app.learning_models import AccessGrantRow, Course, Enrollment, Learner, OutboundEvent, LearningJob
 from app.learning_access import CANONICAL_CAPABILITY
@@ -174,6 +175,40 @@ def test_course_enter_alias_accepted_on_evaluate(lms):
     with s.db() as db:
         learner, course = db.get(Learner, "L1"), db.get(Course, "pr")
         assert learning_service.paid_access(db, learner, course) is True
+
+
+def test_outbound_transport_error_is_retryable(lms, monkeypatch):
+    s = lms
+    monkeypatch.setenv("VORONKA_COMPLETION_URL", "https://voronka.example.ru/hooks/lms")
+    monkeypatch.setenv("VORONKA_LMS_HMAC_SECRET", "s" * 40)
+    with s.db.begin() as db:
+        learner = Learner(id="Lout", subject="sub-out", email="o@example.ru", name="O",
+                          profile_id="vp", voronka_profile_id="vp")
+        course = db.scalar(select(Course))
+        db.add(learner)
+        learning_service.queue_completion(db, learner, course, "done work", actor="owner")
+    with s.db() as db:
+        job = db.scalar(select(LearningJob).where(LearningJob.kind == "outbound"))
+    with patch("httpx.Client") as client_cls:
+        client_cls.return_value.__enter__.return_value.post.side_effect = httpx.ConnectTimeout("boom")
+        with pytest.raises(learning_service.IntegrationError) as err:
+            learning_service.deliver_outbound(job)
+        assert err.value.retryable and err.value.code == "voronka_completion_transport"
+
+
+def test_recover_interrupted_requeues_outbound(lms):
+    s = lms
+    with s.db.begin() as db:
+        db.add(OutboundEvent(id="ob1", kind="learning.completed", dedupe_key="k1",
+                             payload={}, status="pending"))
+        db.add(LearningJob(id="job-ob", dedupe_key="outbound:ob1", kind="outbound",
+                           target_id="ob1", status="running",
+                           updated_at=now() - timedelta(minutes=10)))
+        learning_service.recover_interrupted(db)
+    with s.db() as db:
+        job = db.get(LearningJob, "job-ob")
+        assert job.status == "pending" and job.error == "worker_interrupted"
+        assert db.get(OutboundEvent, "ob1").status == "pending"
 
 
 def test_hmac_auth_and_completion_outbound(lms, monkeypatch):

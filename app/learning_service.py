@@ -208,12 +208,16 @@ def deliver_outbound(job):
         raise IntegrationError("voronka_completion_unconfigured", False)
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    with httpx.Client(timeout=15) as client:
-        response = client.post(url, content=body, headers={
-            "Content-Type": "application/json",
-            "X-Lms-Signature": "sha256=" + sig,
-            "X-Lms-Event-Id": event_id,
-        })
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.post(url, content=body, headers={
+                "Content-Type": "application/json",
+                "X-Lms-Signature": "sha256=" + sig,
+                "X-Lms-Event-Id": event_id,
+            })
+    except httpx.HTTPError as exc:
+        # DNS / connect / timeout — retryable like other LMS HTTP adapters.
+        raise IntegrationError("voronka_completion_transport", True) from exc
     if response.status_code >= 500:
         raise IntegrationError("voronka_completion_upstream", True)
     if response.status_code >= 400:
@@ -462,12 +466,17 @@ def work_once():
 def recover_interrupted(db):
     for row in db.scalars(select(LearningJob).where(LearningJob.status == "running",
             LearningJob.updated_at < now() - timedelta(minutes=5)).with_for_update(skip_locked=True)):
-        row.status = "pending" if row.kind == "enrollment" else "failed"
+        # enrollment + outbound are idempotent (stable event/revision keys).
+        row.status = "pending" if row.kind in {"enrollment", "outbound"} else "failed"
         row.error = "worker_interrupted"
         if row.kind == "chat":
             message = db.get(LearningMessage, row.target_id)
             if message and message.state == "pending":
                 message.state = "failed"
+        if row.kind == "outbound":
+            outbound = db.get(OutboundEvent, row.target_id)
+            if outbound and outbound.status != "delivered":
+                outbound.status, outbound.last_error, outbound.updated_at = "pending", "worker_interrupted", now()
 
 
 def main():

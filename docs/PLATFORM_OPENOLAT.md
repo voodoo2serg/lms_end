@@ -1,48 +1,64 @@
-# Соло-PR: реализуемая платформа
+# LMS End: текущая архитектура (OpenOlat)
 
-Это целевая схема и описание кода данного репозитория. Старые документы про Chamilo/Keycloak-планы сохранены для истории, но при конфликте действует этот файл.
+**Это current architecture doc.** Исторический черновик с Chamilo: [`PLATFORM_ARCHITECTURE.md`](./PLATFORM_ARCHITECTURE.md) (помечен historical).  
+Границы репо: [`LMS_OWNERSHIP.md`](./LMS_OWNERSHIP.md). Контракты: [`LMS_INTEGRATIONS.md`](./LMS_INTEGRATIONS.md).
 
 ## Состав и источники
 
-- Voronka на FastAPI/PostgreSQL: исходная база `voodoo2serg/voronka`, commit `a3a92ec40b4a1e8c69bad273b1663a5fca789d69`.
-- Сайт в `site/`: исходная база `voodoo2serg/solo_pr`, commit `b259f9b85d6a2c1ab7fe6e2e030fa15fab5b6b7f`.
+- **Активный runtime:** OpenOlat + Keycloak + thin adapter (`app.lms_app`, `compose.lms.yaml`).
+- Vendored Voronka (`app/` CRM/funnel) и `site/` — **frozen archive** (см. LMS_OWNERSHIP); money SoR = отдельный репо **voronka**; сайт/ЛК = **solo_pr**.
 - OpenOlat: внешний штатный сервер, код ядра не копируется и не меняется.
-- Keycloak: внешний поставщик идентификации. `issuer+sub` — постоянная идентичность.
-- BigBlueButton: отдельный сервер, подключается штатным модулем OpenOlat.
-- RAGA: внешний существующий Gateway. Приватный исходный код RAGA в публичный репозиторий не переносится.
+- Keycloak: IdP. `issuer+sub` — постоянная идентичность.
+- BigBlueButton: **сервер C**, внешний; штатный модуль OpenOlat.
+- RAGA: внешний Gateway (опциональный AI).
 
 ## Владельцы данных
 
 | Данные | Владелец |
 |---|---|
-| Контакты, сделки, воронки, заказы, платежи | Voronka PostgreSQL |
-| Связь продукта с курсом и группой | `learning_courses` |
-| Слушатель и связь с CRM/SSO/LMS | `learning_users` |
-| Коммерческое решение о доступе | CRM-заказы и `course.view` AccessGrant; default — полная оплата |
-| Проекция зачисления | `learning_enrollments` |
+| Контакты, сделки, воронки, заказы, платежи, AccessGrant authority | **voronka** (отдельный репо/БД) |
+| Связь commerce product ↔ OpenOlat course/group | `learning_courses` (soft `commerce_product_id`, без FK в CRM) |
+| Слушатель SSO/LMS | `learning_users` (`subject` = Keycloak sub; soft `voronka_profile_id`) |
+| Коммерческое решение о доступе | voronka → M2M `enrollment.desired|revoke` (`course.view`) |
+| Проекция зачисления | `learning_enrollments` + `learning_access_grants` |
 | Задания интеграций | `learning_jobs` |
-| Напоминания и уведомления | `learning_reminders`, `learning_notices` |
-| Учебные работы, оценки, портфолио, BBB-комнаты | OpenOlat и его файловое хранилище |
-| Пароли, MFA, подтверждение email | Keycloak PostgreSQL |
-| Знания и ключи оплачиваемых моделей | RAGA |
-| Резервы расходов и token usage | `learning_ai_usage` |
-| Тексты/профиль старого кабинета и входящие заявки сайта | Пока существующие SQLite/JSON сайта на российском сервере |
-
-Последний пункт — граница текущего релиза: сайт ещё не переведён полностью на PostgreSQL. Старые community-аккаунты не мигрируются молча. Вход через Keycloak создаёт сессии и учебного, и community-кабинета. Существующие локальные аккаунты связываются с проверенным Keycloak sub администратором через `site/scripts/link-oidc.mjs`; автоматическое слияние по email запрещено. Покупки старого кабинета не считаются подтверждёнными оплатами CRM.
+| Академическое completion → commerce | `learning_outbound_events` (`learning.completed`) |
+| Учебные работы, оценки, портфолио, BBB-комнаты | OpenOlat FS/DB |
+| Пароли, MFA, email verify | Keycloak PostgreSQL |
+| Знания / платные модели | RAGA |
+| Сайт / ЛК / leads | **solo_pr** (RU cloud) |
 
 ## Размещение
 
-Сервер A: Next.js, сайт, CMS, зашифрованные учебные сессии и долговечная очередь форм. Сервер B: API/CRM, два worker, PostgreSQL, Redis, OpenOlat и Keycloak. Сервер C: BBB. Персональные и учебные данные рекомендуется разместить в РФ, с отдельным хранилищем копий.
+| Сервер | Роль |
+|--------|------|
+| A (RU cloud) | solo_pr site + ЛК BFF |
+| B (home) | LMS: OpenOlat + Keycloak + adapter DB/API/worker (`compose.lms.yaml`). ~4 vCPU / 8–12 GB без CRM |
+| B optional CRM | Отдельный voronka stack — **не** требуется, чтобы поднять LMS |
+| C | BBB |
 
-Существующую БД Voronka оставляем на PostgreSQL 16. Новые независимые базы OpenOlat/Keycloak — на PostgreSQL 18. Это одна технология, но пока два экземпляра: не выполняем опасное автоматическое обновление старого volume. Никаких прямых SQL-записей в базы OpenOlat и Keycloak.
+Нет shared Postgres между solo_pr / voronka / lms_end. Прямых SQL в OpenOlat/Keycloak нет.
 
 ## Доступ и оплата
 
-`learning_courses` связывает один продукт CRM с одной закрытой группой OpenOlat. До подключения группа должна быть связана с нужным курсом в LMS. Поле `olat_course_id` — RepositoryEntry key для ссылки `/url/RepositoryEntry/{key}`, `olat_group_id` — BusinessGroup key.
+`learning_courses` связывает soft commerce product id с закрытой BusinessGroup OpenOlat.  
+`olat_course_id` — RepositoryEntry key (`/url/RepositoryEntry/{key}`); `olat_group_id` — BusinessGroup key.
 
-Разрешение рассчитывается по всем открытым заказам этого слушателя на продукт. Возврат, отключение курса или истечение AccessGrant могут его отозвать. Другой оплаченный заказ сохраняет доступ. Личная запись слушателя и его работы не удаляются.
+**Canonical capability:** `course.view` (LMS-4). Legacy CRM alias `course.enter` принимается reconciler’ом.
 
-Worker сверяет доступ каждые 30 секунд. Он создаёт пользователя с детерминированным login, externalId=Keycloak sub, привязывает аутентификацию `KEYCLOAK` и меняет членство в группе. Необходимо отключить самостоятельную запись и публичный доступ к платному курсу. У преподавателей не должно быть незадокументированных прямых назначений слушателя в обход коммерческой группы. Прямой доступ и уже открытая LMS-сессия проверяются на живой установке при приёмке.
+`ACCESS_AUTHORITY=external` (default): LMS **не** читает Order/Payment и **не** создаёт Robokassa-заказы.  
+Worker сверяет доступ каждые 30 с; создаёт пользователя (externalId=Keycloak sub), биндит `KEYCLOAK`, меняет membership. Self-enrol и public paid course — выключены (см. `LMS_ENFORCEMENT.md`).
+
+## Capability list (current)
+
+| Capability | Owner | Enforced in OpenOlat v1? |
+|---|---|---|
+| `course.view` | LMS enrollment (canonical) | Yes — BusinessGroup membership |
+| `course.enter` | Legacy CRM alias → treated as `course.view` | Same |
+| `video.play`, `document.*`, `archive.view`, `live.join` | voronka policy only | No (group-only v1) |
+| `certificate.issue` / download | voronka (payment + academic) | No — LMS emits `learning.completed` only |
+
+Servers: **A** solo_pr · **B** LMS home (`compose.lms.yaml`) · **C** BBB external.
 
 ## ИИ
 

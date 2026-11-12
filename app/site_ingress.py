@@ -5,7 +5,7 @@ import json
 import os
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import String, JSON, ForeignKey
+from sqlalchemy import String, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base, Session
 from app.crm_service import create_profile
@@ -16,7 +16,8 @@ class SiteReceipt(Base):
     __tablename__ = "learning_site_receipts"
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     digest: Mapped[str] = mapped_column(String(64))
-    profile_id: Mapped[str] = mapped_column(ForeignKey("crm_profiles.id"))
+    # Soft CRM profile ref — no FK into money/CRM tables (LMS-3).
+    profile_id: Mapped[str] = mapped_column(String(36))
     evidence: Mapped[dict] = mapped_column(JSON)
 
 

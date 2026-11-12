@@ -20,6 +20,36 @@ jobs:
       - run: cp .env.example .env
       - run: docker compose --env-file .env.example config --quiet
 
+  lms-adapter:
+    # LMS-11: adapter + OpenOlat client contracts without full CRM commerce suite.
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite://
+      REDIS_URL: redis://localhost:6379/0
+      ACCESS_AUTHORITY: external
+      OWNER_TELEGRAM_ID: 123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_grant_sync.py tests/test_learning_migration.py tests/test_learning.py -k "openolat or grant or schema or checkout_gone or course_enter or hmac or legacy_course"
+      - run: |
+          cp .env.example .env
+          # Minimal pins so compose.lms.yaml config validates without real WAR/Keycloak pulls.
+          sed -i 's/^KEYCLOAK_VERSION=.*/KEYCLOAK_VERSION=26.0.0/' .env
+          sed -i 's/^OPENOLAT_WAR_URL=.*/OPENOLAT_WAR_URL=https://example.invalid\/openolat.war/' .env
+          sed -i 's/^OPENOLAT_WAR_SHA256=.*/OPENOLAT_WAR_SHA256=deadbeef/' .env
+          sed -i 's/^LEARNING_DB_ROOT_PASSWORD=.*/LEARNING_DB_ROOT_PASSWORD=test/' .env
+          sed -i 's/^OPENOLAT_DB_PASSWORD=.*/OPENOLAT_DB_PASSWORD=test/' .env
+          sed -i 's/^KEYCLOAK_DB_PASSWORD=.*/KEYCLOAK_DB_PASSWORD=test/' .env
+          sed -i 's/^KEYCLOAK_ADMIN_PASSWORD=.*/KEYCLOAK_ADMIN_PASSWORD=test/' .env
+          sed -i 's/^OPENOLAT_OIDC_SECRET=.*/OPENOLAT_OIDC_SECRET=testsecret/' .env
+          sed -i 's/^AUTH_DOMAIN=.*/AUTH_DOMAIN=auth.example.ru/' .env
+          sed -i 's/^LEARN_DOMAIN=.*/LEARN_DOMAIN=learn.example.ru/' .env
+      - run: docker compose -f compose.lms.yaml --env-file .env config --quiet
+
   migrations:
     runs-on: ubuntu-latest
     services:
@@ -74,7 +104,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pip install -r requirements.txt
       - run: alembic upgrade head
-      - run: python -m pytest -q tests/test_operational.py tests/test_crm.py tests/test_learning.py
+      - run: python -m pytest -q tests/test_operational.py tests/test_crm.py tests/test_learning.py tests/test_grant_sync.py
   docker:
     runs-on: ubuntu-latest
     steps:

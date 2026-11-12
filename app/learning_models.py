@@ -1,4 +1,7 @@
-"""Learning integration state. OpenOlat owns academic records; CRM owns money."""
+"""Learning adapter state. OpenOlat owns academic records; voronka owns money.
+
+External ids only — no ForeignKey into CRM money tables (LMS-3).
+"""
 from datetime import datetime
 from sqlalchemy import String, Integer, Boolean, DateTime, JSON, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -8,8 +11,10 @@ from app.db import Base, now
 class Learner(Base):
     __tablename__ = "learning_users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    subject: Mapped[str] = mapped_column(String(200), unique=True)
-    profile_id: Mapped[str] = mapped_column(ForeignKey("crm_profiles.id"), unique=True)
+    subject: Mapped[str] = mapped_column(String(200), unique=True)  # keycloak_sub
+    # Soft reference to voronka CRM profile; never an FK into crm_profiles.
+    profile_id: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
+    voronka_profile_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     email: Mapped[str] = mapped_column(String(250))
     name: Mapped[str] = mapped_column(String(200))
     olat_id: Mapped[str | None] = mapped_column(String(40), unique=True, nullable=True)
@@ -21,8 +26,10 @@ class Learner(Base):
 class Course(Base):
     __tablename__ = "learning_courses"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
-    product_id: Mapped[str] = mapped_column(ForeignKey("crm_products.id"), unique=True)
+    # Soft tenant / product refs — no FK to projects / crm_products.
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
+    product_id: Mapped[str] = mapped_column(String(36), unique=True)
+    commerce_product_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(200))
     olat_course_id: Mapped[str] = mapped_column(String(40))
     olat_group_id: Mapped[str] = mapped_column(String(40), unique=True)
@@ -112,5 +119,41 @@ class BotLink(Base):
     __tablename__ = "learning_bot_links"
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     learner_id: Mapped[str] = mapped_column(ForeignKey("learning_users.id"))
-    connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
+    # Soft ref to funnel connection — no FK (LMS-3 / freeze path).
+    connection_id: Mapped[str] = mapped_column(String(36))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AccessGrantRow(Base):
+    """Inbound voronka AccessGrant events (LMS-2). Idempotent by event_id (PK).
+
+    Multiple events per learner/course are retained; effective access uses the
+    highest revision (see grant_access_from_sync).
+    """
+    __tablename__ = "learning_access_grants"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)  # event_id
+    keycloak_sub: Mapped[str] = mapped_column(String(200), index=True)
+    voronka_profile_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    course_id: Mapped[str] = mapped_column(String(80), index=True)
+    commerce_product_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    capability: Mapped[str] = mapped_column(String(40), default="course.view")
+    min_paid_percent: Mapped[int] = mapped_column(Integer, default=100)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class OutboundEvent(Base):
+    """Signed outbound facts to voronka (LMS-10). Commerce owns certificate policy."""
+    __tablename__ = "learning_outbound_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    dedupe_key: Mapped[str] = mapped_column(String(240), unique=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

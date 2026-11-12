@@ -20,6 +20,8 @@ from app.crm_api import router as crm_router
 app.include_router(crm_router)
 from app.learning_api import router as learning_router
 app.include_router(learning_router)
+from app.learning_grants import router as grants_router
+app.include_router(grants_router)
 from app.site_ingress import router as site_ingress_router
 app.include_router(site_ingress_router)
 

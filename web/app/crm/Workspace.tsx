@@ -317,7 +317,8 @@ export default function Workspace() {
           label: 'Действие',
           type: 'select',
           options: [
-            ['course.enter', 'Вход в курс'],
+            ['course.view', 'Просмотр курса (LMS)'],
+            ['course.enter', 'Вход в курс (legacy alias)'],
             ['video.play', 'Видео'],
             ['document.view', 'Документ'],
             ['archive.view', 'Архив'],

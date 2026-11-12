@@ -1,8 +1,12 @@
-# Архитектура единой платформы: Next.js + Voronka CRM + Chamilo + RAGA
+# [HISTORICAL] Архитектура: Next.js + Voronka CRM + Chamilo + RAGA
 
-Дата: 2026-11-09. Статус: архитектурное описание для реализации, а не отчёт о готовом продукте.
+> **Не актуально как current architecture.** Операционная правда — **OpenOlat**, не Chamilo/MariaDB.  
+> Читайте: [`PLATFORM_OPENOLAT.md`](./PLATFORM_OPENOLAT.md), [`LMS_OWNERSHIP.md`](./LMS_OWNERSHIP.md), [`LMS_INTEGRATIONS.md`](./LMS_INTEGRATIONS.md).  
+> Этот файл сохранён только как исторический черновик (2026-11-09). Capability list ниже (`course.enter`, …) superseded: LMS enrollment canonical = **`course.view`**.
 
-Этот документ дополняет [объём CRM](CRM_IMPLEMENTATION_SCOPE.md) и [единую модель данных](PLATFORM_DATA_MODEL.md). Новое решение владельца: продающий сайт и личный кабинет на Next.js, обучение на собственной Chamilo. При противоречиях о формате выдачи курсов действует этот документ. Работающие функции описаны в READINESS.md.
+Дата: 2026-11-09. Статус: **historical / superseded**.
+
+Этот документ дополняет [объём CRM](CRM_IMPLEMENTATION_SCOPE.md) и [единую модель данных](PLATFORM_DATA_MODEL.md). Исторический черновик предполагал Chamilo; реализация перешла на OpenOlat.
 
 ## 1. Цель
 

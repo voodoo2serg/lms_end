@@ -1,17 +1,16 @@
 """Deterministic access policy, scheduler and bounded AI execution."""
 import hashlib
 import os
-from datetime import timedelta, timezone
+from datetime import timedelta
 from sqlalchemy import select, func, text
 from app.db import Session, now, Event, Connection, Identity, Run, Version
-from app.crm_models import Profile, Order, AccessGrant
 from app.crm_service import uid, balance, available_identity
-from app.learning_models import Course, Learner, Enrollment, LearningJob, Reminder, LearningNotice, AIUsage, LearningMessage, BotLink
+from app.learning_access import CAPABILITY_ALIASES, is_external, utc
+from app.learning_models import (
+    Course, Learner, Enrollment, LearningJob, Reminder, LearningNotice,
+    AIUsage, LearningMessage, BotLink, OutboundEvent,
+)
 from app.learning_clients import OpenOlat, raga_chat, IntegrationError, endpoint
-
-
-def utc(value):
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def enqueue(db, kind, target_id, key, payload=None, due=None):
@@ -28,29 +27,99 @@ def audit(db, action, actor="system", **data):
     db.add(Event(id=uid(), kind="learning." + action, payload={"actor": actor, **data}))
 
 
-def paid_access(db, learner, course):
-    if not course.active:
+def ensure_learner_external(db, subject, email, name, voronka_profile_id=None):
+    row = db.scalar(select(Learner).where(Learner.subject == subject))
+    if row:
+        if voronka_profile_id and not row.voronka_profile_id:
+            row.voronka_profile_id = voronka_profile_id
+            if not row.profile_id:
+                row.profile_id = voronka_profile_id
+        if email and row.email != email:
+            row.email = email.strip().lower()[:250]
+        if name and row.name != name:
+            row.name = name[:200]
+        return row
+    row = Learner(
+        id=uid(), subject=subject, email=(email or "").strip().lower()[:250] or f"{subject}@learners.local",
+        name=(name or subject)[:200], profile_id=voronka_profile_id, voronka_profile_id=voronka_profile_id)
+    db.add(row)
+    db.flush()
+    return row
+
+
+def apply_enrollment_desired(db, learner, course, desired, actor="system"):
+    row = db.scalar(select(Enrollment).where(Enrollment.learner_id == learner.id,
+        Enrollment.course_id == course.id).with_for_update())
+    if not row and not desired:
+        row = Enrollment(id=uid(), learner_id=learner.id, course_id=course.id, desired=False,
+                         revision=1, state="revoked")
+        db.add(row)
+        db.flush()
+        return row
+    if not row:
+        row = Enrollment(id=uid(), learner_id=learner.id, course_id=course.id, desired=desired,
+                         revision=1, state="pending")
+        db.add(row)
+        db.flush()
+        audit(db, "access.requested", actor, learner_id=learner.id, course_id=course.id)
+    elif row.desired != desired:
+        row.desired, row.state, row.revision, row.updated_at = desired, "pending", row.revision + 1, now()
+        audit(db, "access.changed", actor, learner_id=learner.id, course_id=course.id, desired=desired)
+    if row.state == "pending":
+        enqueue(db, "enrollment", row.id, f"enrollment:{row.id}:{row.revision}", {"revision": row.revision})
+    return row
+
+
+def legacy_paid_access(db, learner, course):
+    """Transitional monorepo path: read CRM Order/Payment/AccessGrant in-process.
+
+    LMS-4: accept course.view (canonical) and course.enter (CRM UI legacy alias).
+    Do not extend — ACCESS_AUTHORITY=external is the home-server path.
+    """
+    from app.crm_models import Order, AccessGrant
+    if not course.active or not learner.profile_id:
         return False
+    product_ids = {course.product_id}
+    if course.commerce_product_id:
+        product_ids.add(course.commerce_product_id)
     orders = db.scalars(select(Order).where(Order.profile_id == learner.profile_id,
-        Order.project_id == course.project_id, Order.product_id == course.product_id, Order.state == "open"))
+        Order.project_id == course.project_id, Order.product_id.in_(product_ids), Order.state == "open"))
     for order in orders:
         financial = balance(db, order)
-        grant = db.scalar(select(AccessGrant).where(AccessGrant.order_id == order.id,
-            AccessGrant.resource == course.id, AccessGrant.capability == "course.view"))
-        if grant and grant.expires_at and utc(grant.expires_at) <= now():
+        grants = list(db.scalars(select(AccessGrant).where(AccessGrant.order_id == order.id,
+            AccessGrant.resource == course.id, AccessGrant.capability.in_(tuple(CAPABILITY_ALIASES)))))
+        # No grant → course.min_paid_percent (paid open order may still grant).
+        if not grants:
+            if financial["paid_minor"] * 100 >= order.total_minor * course.min_paid_percent:
+                return True
             continue
-        threshold = grant.min_paid_percent if grant else course.min_paid_percent
-        if financial["paid_minor"] * 100 >= order.total_minor * threshold:
-            return True
+        for grant in grants:
+            if grant.expires_at and utc(grant.expires_at) <= now():
+                continue
+            threshold = grant.min_paid_percent if grant else course.min_paid_percent
+            if financial["paid_minor"] * 100 >= order.total_minor * threshold:
+                return True
     return False
 
 
+def paid_access(db, learner, course):
+    if is_external():
+        from app.learning_grants import grant_access_from_sync
+        return grant_access_from_sync(db, learner, course)
+    return legacy_paid_access(db, learner, course)
+
+
 def bind_bot(db, connection, identity, raw_token):
+    from app.crm_models import Profile, Order
     token = db.scalar(select(BotLink).where(BotLink.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()).with_for_update())
     if not token or token.connection_id != connection.id or utc(token.expires_at) <= now():
         return False
     learner = db.get(Learner, token.learner_id)
+    if not learner.profile_id:
+        return False
     target = db.get(Profile, learner.profile_id)
+    if not target:
+        return False
     if target.project_id != connection.project_id:
         return False
     prior_profiles = list(db.scalars(select(Profile).where(Profile.contact_id == identity.contact_id)))
@@ -72,34 +141,90 @@ def bind_bot(db, connection, identity, raw_token):
 
 
 def reconcile(db):
-    """Payment/refund is authoritative; a durable periodic sweep also recovers missed events."""
+    """Recompute desired enrollment; durable sweep recovers missed events.
+
+    external: re-evaluate inbound grant rows (expiry/revoke).
+    legacy_crm: payment/refund in CRM tables remains authoritative for that mode only.
+    """
     pid = os.getenv("PLATFORM_PROJECT_ID")
     if not pid:
         return
     courses = list(db.scalars(select(Course).where(Course.project_id == pid)))
-    learners = list(db.scalars(select(Learner).join(Profile, Profile.id == Learner.profile_id).where(Profile.project_id == pid)))
+    if is_external():
+        learners = list(db.scalars(select(Learner)))
+    else:
+        from app.crm_models import Profile
+        learners = list(db.scalars(select(Learner).join(Profile, Profile.id == Learner.profile_id).where(Profile.project_id == pid)))
     for learner in learners:
         for course in courses:
             desired = paid_access(db, learner, course)
-            row = db.scalar(select(Enrollment).where(Enrollment.learner_id == learner.id,
-                Enrollment.course_id == course.id).with_for_update())
-            if not row and not desired:
-                continue
-            if not row:
-                row = Enrollment(id=uid(), learner_id=learner.id, course_id=course.id, desired=desired,
-                                 revision=1, state="pending")
-                db.add(row); db.flush()
-                audit(db, "access.requested", learner_id=learner.id, course_id=course.id)
-            elif row.desired != desired:
-                row.desired, row.state, row.revision, row.updated_at = desired, "pending", row.revision + 1, now()
-                audit(db, "access.changed", learner_id=learner.id, course_id=course.id, desired=desired)
-            if row.state == "pending":
-                enqueue(db, "enrollment", row.id, f"enrollment:{row.id}:{row.revision}", {"revision": row.revision})
+            apply_enrollment_desired(db, learner, course, desired)
 
 
 def has_access(db, learner_id, course_id):
     learner, course = db.get(Learner, learner_id), db.get(Course, course_id)
     return bool(learner and course and paid_access(db, learner, course))
+
+
+def queue_completion(db, learner, course, evidence, actor="system"):
+    """LMS-10: academic completion fact → voronka. Certificate policy stays commerce-side."""
+    key = f"learning.completed:{learner.id}:{course.id}"
+    old = db.scalar(select(OutboundEvent).where(OutboundEvent.dedupe_key == key))
+    if old:
+        return old
+    row = OutboundEvent(
+        id=uid(), kind="learning.completed", dedupe_key=key,
+        payload={
+            "schema_version": 1,
+            "event_id": key,
+            "kind": "learning.completed",
+            "keycloak_sub": learner.subject,
+            "voronka_profile_id": learner.voronka_profile_id or learner.profile_id,
+            "course_id": course.id,
+            "commerce_product_id": course.commerce_product_id or course.product_id,
+            "evidence": evidence,
+            "actor": actor,
+        })
+    db.add(row)
+    enqueue(db, "outbound", row.id, "outbound:" + row.id)
+    audit(db, "completion.queued", actor, learner_id=learner.id, course_id=course.id)
+    return row
+
+
+def deliver_outbound(job):
+    import hashlib
+    import hmac
+    import json
+    import httpx
+    with Session() as db:
+        row = db.get(OutboundEvent, job.target_id)
+        if not row or row.status == "delivered":
+            return
+        payload = dict(row.payload)
+        event_id = row.id
+    url = (os.getenv("VORONKA_COMPLETION_URL") or "").strip()
+    secret = (os.getenv("VORONKA_LMS_HMAC_SECRET") or os.getenv("VORONKA_LMS_TOKEN") or "").strip()
+    if not url or not secret:
+        raise IntegrationError("voronka_completion_unconfigured", False)
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.post(url, content=body, headers={
+                "Content-Type": "application/json",
+                "X-Lms-Signature": "sha256=" + sig,
+                "X-Lms-Event-Id": event_id,
+            })
+    except httpx.HTTPError as exc:
+        # DNS / connect / timeout — retryable like other LMS HTTP adapters.
+        raise IntegrationError("voronka_completion_transport", True) from exc
+    if response.status_code >= 500:
+        raise IntegrationError("voronka_completion_upstream", True)
+    if response.status_code >= 400:
+        raise IntegrationError("voronka_completion_rejected", False)
+    with Session.begin() as db:
+        row = db.get(OutboundEvent, job.target_id)
+        row.status, row.updated_at, row.last_error = "delivered", now(), ""
 
 
 def course_link(course):
@@ -153,17 +278,21 @@ def run_enrollment(job):
         if not row or row.revision != job.payload["revision"]:
             return
         learner, course = db.get(Learner, row.learner_id), db.get(Course, row.course_id)
-        desired = paid_access(db, learner, course)
+        # Prefer the enrollment projection already decided by grant sync / reconcile.
+        desired = bool(row.desired) if is_external() else paid_access(db, learner, course)
         learner_id = learner.id
+        course_id = course.id
+        group_id = course.olat_group_id
+        subject = learner.subject
+        olat_id = learner.olat_id
     client = OpenOlat()
     try:
-        if not learner.olat_id:
+        if not olat_id:
             olat_id = client.ensure_user(learner)
             with Session.begin() as db:
                 db.get(Learner, learner_id).olat_id = olat_id
-            learner.olat_id = olat_id
-        client.bind_keycloak(learner.olat_id, learner.subject)
-        client.membership(course.olat_group_id, learner.olat_id, desired)
+        client.bind_keycloak(olat_id, subject)
+        client.membership(group_id, olat_id, desired)
     finally:
         client.close()
     with Session.begin() as db:
@@ -172,10 +301,10 @@ def run_enrollment(job):
             row.state, row.updated_at = ("active" if desired else "revoked"), now()
             if desired and not db.scalar(select(Reminder).where(Reminder.learner_id == learner_id,
                     Reminder.external_key == "welcome:" + row.id)):
-                db.add(Reminder(id=uid(), learner_id=learner_id, course_id=course.id,
+                db.add(Reminder(id=uid(), learner_id=learner_id, course_id=course_id,
                     external_key="welcome:" + row.id, title="Курс открыт. Начните с программы и первого урока",
                     kind="course", due_at=now() + timedelta(minutes=1), use_ai=True))
-            audit(db, "access.synced", learner_id=learner_id, course_id=course.id, desired=desired)
+            audit(db, "access.synced", learner_id=learner_id, course_id=course_id, desired=desired)
 
 
 def run_chat(job):
@@ -198,6 +327,9 @@ def run_chat(job):
 
 
 def run_funnel_ai(job):
+    if is_external():
+        return  # Funnel AI stays in voronka; not part of LMS-only runtime.
+    from app.crm_models import Profile
     with Session() as db:
         run = db.get(Run, job.target_id)
         if not run or run.status != "ai_pending" or run.current != job.payload["node"]:
@@ -233,7 +365,12 @@ def run_funnel_ai(job):
 
 def deliver_notice(db, learner, course, title, body):
     db.add(LearningNotice(id=uid(), learner_id=learner.id, course_id=course.id, title=title, body=body))
+    if is_external() or not learner.profile_id:
+        return  # Web notices only in LMS-only mode; messenger delivery is voronka's job.
+    from app.crm_models import Profile
     profile = db.get(Profile, learner.profile_id)
+    if not profile:
+        return
     # No guessing of Telegram/MAX usernames. Only established bot identities or permitted email.
     connection_id = profile.extra.get("learning_connection_id")
     if connection_id:
@@ -250,8 +387,12 @@ def run_reminder(job):
         if not reminder or reminder.state != "queued":
             return
         learner, course = db.get(Learner, reminder.learner_id), db.get(Course, reminder.course_id)
-        profile = db.get(Profile, learner.profile_id)
-        if not learner.reminders or profile.stopped or not has_access(db, learner.id, course.id):
+        stopped = False
+        if not is_external() and learner.profile_id:
+            from app.crm_models import Profile
+            profile = db.get(Profile, learner.profile_id)
+            stopped = bool(profile and profile.stopped)
+        if not learner.reminders or stopped or not has_access(db, learner.id, course.id):
             with Session.begin() as changed:
                 changed.get(Reminder, job.target_id).state = "cancelled"
             return
@@ -267,8 +408,13 @@ def run_reminder(job):
     with Session.begin() as db:
         reminder = db.get(Reminder, job.target_id)
         learner = db.get(Learner, reminder.learner_id)
-        profile = db.get(Profile, learner.profile_id)
-        if reminder.state != "queued" or not learner.reminders or profile.stopped or not has_access(db, learner.id, course.id):
+        course = db.get(Course, reminder.course_id)
+        stopped = False
+        if not is_external() and learner.profile_id:
+            from app.crm_models import Profile
+            profile = db.get(Profile, learner.profile_id)
+            stopped = bool(profile and profile.stopped)
+        if reminder.state != "queued" or not learner.reminders or stopped or not has_access(db, learner.id, course.id):
             reminder.state = "cancelled"
             return
         deliver_notice(db, learner, course, reminder.title, body)
@@ -290,11 +436,12 @@ def work_once():
         row.status, row.updated_at, row.attempts = "running", now(), row.attempts + 1
         job = row
     try:
-        {"enrollment": run_enrollment, "chat": run_chat, "funnel_ai": run_funnel_ai, "reminder": run_reminder}[job.kind](job)
+        {"enrollment": run_enrollment, "chat": run_chat, "funnel_ai": run_funnel_ai,
+         "reminder": run_reminder, "outbound": deliver_outbound}[job.kind](job)
         status, error = "completed", ""
     except IntegrationError as exc:
         # Only idempotent LMS calls auto-retry. A timed-out paid AI call may have billed.
-        status = "pending" if job.kind == "enrollment" and exc.retryable and job.attempts < 8 else "failed"
+        status = "pending" if job.kind in {"enrollment", "outbound"} and exc.retryable and job.attempts < 8 else "failed"
         error = exc.code
     except Exception as exc:
         status, error = "failed", type(exc).__name__
@@ -305,6 +452,13 @@ def work_once():
             row.due_at = now() + timedelta(seconds=min(3600, 10 * 2 ** row.attempts))
         if status == "failed" and job.kind == "chat":
             db.get(LearningMessage, job.target_id).state = "failed"
+        if job.kind == "outbound":
+            outbound = db.get(OutboundEvent, job.target_id)
+            if outbound and status != "completed":
+                outbound.status = "failed" if status == "failed" else "pending"
+                outbound.attempts = row.attempts
+                outbound.last_error = error
+                outbound.updated_at = now()
         audit(db, "job." + status, job_id=job.id, kind=job.kind, error=error)
     return True
 
@@ -312,12 +466,17 @@ def work_once():
 def recover_interrupted(db):
     for row in db.scalars(select(LearningJob).where(LearningJob.status == "running",
             LearningJob.updated_at < now() - timedelta(minutes=5)).with_for_update(skip_locked=True)):
-        row.status = "pending" if row.kind == "enrollment" else "failed"
+        # enrollment + outbound are idempotent (stable event/revision keys).
+        row.status = "pending" if row.kind in {"enrollment", "outbound"} else "failed"
         row.error = "worker_interrupted"
         if row.kind == "chat":
             message = db.get(LearningMessage, row.target_id)
             if message and message.state == "pending":
                 message.state = "failed"
+        if row.kind == "outbound":
+            outbound = db.get(OutboundEvent, row.target_id)
+            if outbound and outbound.status != "delivered":
+                outbound.status, outbound.last_error, outbound.updated_at = "pending", "worker_interrupted", now()
 
 
 def main():

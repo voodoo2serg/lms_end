@@ -1,18 +1,19 @@
-# Соло-PR · LMS End
+# LMS End
 
-Сайт, CRM и воронки Voronka, OpenOlat, общий вход Keycloak и ИИ через существующий RAGA Gateway. Один экземпляр — один проект. EspoCRM и Moodle не используются.
+**Роль:** LMS на домашнем сервере — OpenOlat + Keycloak + thin access adapter.  
+**Не роль:** деньги / Robokassa / CRM (это **voronka**); сайт / ЛК BFF (это **solo_pr**). Репозитории и БД не сливаются.
 
-## Реализовано
+Текущая архитектура: [`docs/PLATFORM_OPENOLAT.md`](docs/PLATFORM_OPENOLAT.md) · границы: [`docs/LMS_OWNERSHIP.md`](docs/LMS_OWNERSHIP.md) · контракты: [`docs/LMS_INTEGRATIONS.md`](docs/LMS_INTEGRATIONS.md).  
+Исторический черновик с Chamilo: [`docs/PLATFORM_ARCHITECTURE.md`](docs/PLATFORM_ARCHITECTURE.md) (**historical**).
 
-- `site/`: существующий сайт и новый кабинет `/learning`: мои курсы, переход в OpenOlat, каталог/оформление заказа, ИИ-помощник, настройки, напоминания, панель владельца.
-- В корне: исходная Voronka — CRM, сценарии, каналы, медиабанк, финансовый учёт и Робокасса. CRM доступна по `/crm/`, редактор воронок — на API-домене.
-- Узел «ИИ-помощник» в редакторе воронок: задача, резервный текст, продолжение сценария. Генерация через отдельный worker; отправка штатным Outbox.
-- Адаптер OpenOlat: создание пользователя, привязка Keycloak sub, назначение/отзыв коммерческой группы по реальной оплате, возвратам и сроку AccessGrant.
-- Keycloak JWT, PKCE, шифрование token sessions; общий вход в учебный и community-кабинет. Старые аккаунты связываются явно.
-- Заявки сайта передаются в CRM через долговечную очередь с подтверждением согласия и дедупликацией.
-- Приветственное напоминание после зачисления; планируемые сообщения о курсе/занятии/домашнем задании, opt-out, повторная проверка доступа перед отправкой.
-- Изолированные RAGA aliases, лимиты запросов, резерв бюджета, журнал usage; курс, воронка и черновики менеджера.
-- Миграция 0007, тесты, CI, конфигурация установки, резервирование.
+## Реализовано (LMS Block 2)
+
+- Thin adapter `app.lms_app` + `compose.lms.yaml` (learning-db, Keycloak, OpenOlat, API/worker) без Voronka CRM stack.
+- Inbound M2M `POST /api/integrations/voronka/enrollment` (идемпотентный grant sync → enrollment / OpenOlat group).
+- Learning schema без FK в CRM money tables (миграция 0008 + adapter `create_all`).
+- Canonical capability `course.view`; checkout в LMS отключён при `ACCESS_AUTHORITY=external` (410).
+- Outbound `learning.completed` → voronka; backup/enforcement/ownership docs.
+- Vendored `web/` + `site/` + CRM funnel modules — **frozen archive** (не runtime path для home LMS).
 
 ## Границы готовности
 
@@ -26,28 +27,36 @@ CMS и старый community-кабинет пока используют су�
 
 ## Архитектура
 
-Подробная модель и владельцы данных: [PLATFORM_OPENOLAT.md](docs/PLATFORM_OPENOLAT.md). История исходной Voronka: [VORONKA_BASE.md](docs/VORONKA_BASE.md).
-
 | Контур | Состав |
 |---|---|
-| A, РФ | Next.js, CMS, серверные сессии, очередь форм |
-| B, РФ | Voronka API, delivery-worker, learning-worker, PostgreSQL/Redis, OpenOlat и Keycloak |
-| C | Отдельная штатная установка BBB |
-| Существующий RAGA | Знания и подключение оплачиваемых моделей |
+| A, RU cloud | **solo_pr** — сайт, CMS, ЛК BFF |
+| B, home | **lms_end** — OpenOlat, Keycloak, thin adapter (~4 vCPU / 8–12 GB) |
+| B optional | **voronka** CRM/bots — отдельный стек, не нужен чтобы поднять LMS |
+| C | BBB (внешний) |
+| RAGA | Внешний AI gateway |
 
-CRM сохраняет PostgreSQL 16. Независимые новые базы OpenOlat/Keycloak — PostgreSQL 18. Не меняем major-версию на существующем volume автоматически. Для B начальная оценка 8 vCPU / 16–24 ГБ RAM без BBB и локальных моделей; требуется нагрузочная проверка.
-
-## Установка сервера B
-
-Нужны Linux, Docker Engine, Compose v2 и HTTPS-домены api/auth/learn. Сначала выберите поддерживаемые релизы Keycloak и OpenOlat. Dockerfile OpenOlat использует официальный WAR с проверкой SHA256; версия и checksum обязательны.
+## Установка LMS-only (рекомендуется)
 
 ```bash
 git clone https://github.com/voodoo2serg/lms_end.git
 cd lms_end
+python3 -m scripts.bootstrap_lms --domain solo-pr.ru \
+  --keycloak-version VERIFIED_VERSION \
+  --openolat-war-url https://OFFICIAL_RELEASE_URL/openolat.war \
+  --openolat-war-sha256 VERIFIED_SHA256_64CHARS
+# Creates .env (if missing) and deploy/generated/realm.json before Keycloak starts.
+docker compose -f compose.lms.yaml config --quiet
+docker compose -f compose.lms.yaml up -d --build
+```
+
+`ACCESS_AUTHORITY=external` by default. Set `VORONKA_LMS_TOKEN` / completion URL after bootstrap.  
+Edge: [`deploy/lms/nginx-lms.conf`](deploy/lms/nginx-lms.conf). Backup: [`scripts/backup_lms.sh`](scripts/backup_lms.sh) + [`docs/LMS_BACKUP.md`](docs/LMS_BACKUP.md).
+
+### Legacy full platform (frozen)
+
+```bash
 python3 -m scripts.bootstrap_platform --domain solo-pr.ru --keycloak-version VERIFIED_VERSION --openolat-war-url https://OFFICIAL_RELEASE_URL/openolat.war --openolat-war-sha256 VERIFIED_SHA256
-docker compose -f compose.yaml -f compose.platform.yaml up -d --build
-docker compose -f compose.yaml -f compose.platform.yaml exec api python -m scripts.seed_learning
-docker compose -f compose.yaml -f compose.platform.yaml exec api python -m scripts.create_crm_owner
+ACCESS_AUTHORITY=legacy_crm docker compose -f compose.yaml -f compose.platform.yaml up -d --build
 ```
 
 VERIFIED_VERSION/URL/SHA256 выше — значения для обязательной подстановки. Генератор создаёт игнорируемые .env и realm.json со случайными секретами и не перезаписывает существующий .env. При переносе работающей Voronka сохраните её DATABASE_URL, секреты, OWNER_TELEGRAM_ID и PLATFORM_PROJECT_ID.

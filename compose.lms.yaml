@@ -1,0 +1,141 @@
+# LMS-only home-server stack (LMS-5). No Voronka CRM db/Redis/worker required for learning.
+# Usage:
+#   python3 -m scripts.bootstrap_lms --domain solo-pr.ru \
+#     --keycloak-version VERIFIED --openolat-war-url https://... --openolat-war-sha256 ...
+#   # writes .env (if missing) + deploy/generated/realm.json (required Keycloak import mount)
+#   docker compose -f compose.lms.yaml config --quiet
+#   docker compose -f compose.lms.yaml up -d --build
+#
+# BBB remains external (server C). Edge proxy: deploy/lms/nginx-lms.conf.
+#
+# Resource sizing (documented):
+#   OpenOlat + Keycloak + learning-db + thin adapter: ~4 vCPU / 8–12 GB RAM / 40+ GB disk
+#   Optional co-located CRM (compose.yaml + compose.platform.yaml): +4 vCPU / +8–12 GB — avoid on small home boxes
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  learning-db:
+    <<: *logging
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LEARNING_DB_ROOT_PASSWORD:?configure learning database password}
+      OPENOLAT_DB_PASSWORD: ${OPENOLAT_DB_PASSWORD:?configure OpenOlat database password}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?configure Keycloak database password}
+      LMS_ADAPTER_DB_PASSWORD: ${LMS_ADAPTER_DB_PASSWORD:?configure adapter database password}
+    volumes:
+      - learning_pg:/var/lib/postgresql
+      - ./deploy/platform/init-databases.sh:/docker-entrypoint-initdb.d/10-openolat-keycloak.sh:ro
+      - ./deploy/lms/init-adapter-db.sh:/docker-entrypoint-initdb.d/20-adapter.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 1g
+
+  redis:
+    <<: *logging
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --save 60 1
+    volumes: [lms_redis:/data]
+    mem_limit: 128m
+    restart: unless-stopped
+
+  migrate:
+    <<: *logging
+    build: .
+    env_file: .env
+    environment:
+      ACCESS_AUTHORITY: external
+      DATABASE_URL: postgresql+psycopg://lms:${LMS_ADAPTER_DB_PASSWORD}@learning-db:5432/lms_adapter
+      REDIS_URL: redis://redis:6379/0
+    command: python -m scripts.init_lms_adapter_db
+    depends_on:
+      learning-db: {condition: service_healthy}
+
+  api:
+    <<: *logging
+    build: .
+    env_file: .env
+    environment:
+      ACCESS_AUTHORITY: external
+      DATABASE_URL: postgresql+psycopg://lms:${LMS_ADAPTER_DB_PASSWORD}@learning-db:5432/lms_adapter
+      REDIS_URL: redis://redis:6379/0
+    command: python -m uvicorn app.lms_app:app --host 0.0.0.0 --port 8000
+    ports: ["127.0.0.1:${LMS_API_PORT:-18080}:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_started}
+    mem_limit: 512m
+    restart: unless-stopped
+
+  learning-worker:
+    <<: *logging
+    build: .
+    env_file: .env
+    environment:
+      ACCESS_AUTHORITY: external
+      DATABASE_URL: postgresql+psycopg://lms:${LMS_ADAPTER_DB_PASSWORD}@learning-db:5432/lms_adapter
+      REDIS_URL: redis://redis:6379/0
+    command: python -m app.learning_service
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_started}
+    mem_limit: 512m
+    restart: unless-stopped
+
+  keycloak:
+    <<: *logging
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION:?pin a supported Keycloak release}
+    command: start --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://learning-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: https://${AUTH_DOMAIN}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    volumes:
+      - ./deploy/generated/realm.json:/opt/keycloak/data/import/solo-pr.json:ro
+    ports: ["127.0.0.1:18081:8080"]
+    depends_on:
+      learning-db: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 2g
+
+  openolat:
+    <<: *logging
+    build:
+      context: deploy/openolat
+      args:
+        OPENOLAT_WAR_URL: ${OPENOLAT_WAR_URL:?set official supported WAR URL}
+        OPENOLAT_WAR_SHA256: ${OPENOLAT_WAR_SHA256:?verify WAR checksum}
+    environment:
+      OPENOLAT_DOMAIN: ${LEARN_DOMAIN}
+      OPENOLAT_DB_PASSWORD: ${OPENOLAT_DB_PASSWORD}
+      OPENOLAT_OIDC_SECRET: ${OPENOLAT_OIDC_SECRET}
+      AUTH_DOMAIN: ${AUTH_DOMAIN}
+      JAVA_OPTS: -Xms512m -Xmx3g -Dspring.profiles.active=solo -Duser.timezone=Europe/Moscow -Djava.awt.headless=true
+    volumes:
+      - openolat_data:/data/openolat
+    ports: ["127.0.0.1:18082:8080"]
+    depends_on:
+      learning-db: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 4g
+
+volumes:
+  learning_pg:
+  openolat_data:
+  lms_redis:

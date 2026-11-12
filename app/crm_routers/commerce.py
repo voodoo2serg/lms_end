@@ -215,7 +215,9 @@ def record_money(oid: str, body: MoneyBody, admin=Depends(crm_actor)):
 
 class GrantBody(Body):
     resource: str = Field(min_length=1, max_length=200)
-    capability: Literal["course.enter", "video.play", "document.view", "document.download", "archive.view", "live.join", "certificate.issue"]
+    # LMS-4: course.view is the canonical LMS enrollment capability.
+    # course.enter kept as legacy alias accepted by learning reconciler.
+    capability: Literal["course.view", "course.enter", "video.play", "document.view", "document.download", "archive.view", "live.join", "certificate.issue"]
     min_paid_percent: int = Field(default=100, ge=0, le=100)
     expires_at: datetime | None = None
 

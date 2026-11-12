@@ -331,12 +331,36 @@ def test_enrollment_accepts_legacy_resource_revoke_and_x_lms_hmac(lms, monkeypat
         assert db.scalar(select(Enrollment)).desired is False
 
 
-def test_enrollment_accepts_grant_without_keycloak_sub_via_email(lms):
+def test_enrollment_without_keycloak_sub_defers_until_learner_exists(lms):
+    """P1: never synthesize fake Keycloak subjects from email/profile."""
     payload = base_body(event_id="evt-email-sub-1", action="grant")
     del payload["keycloak_sub"]
     r = post_enrollment(lms.client, payload)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 422
+    assert "keycloak_sub" in r.text
+
+    # Once a real learner exists, resolve by voronka_profile_id / email.
+    with lms.db.begin() as db:
+        db.add(Learner(
+            id="L-real", subject="subject-one", email="anna@example.ru", name="Анна",
+            profile_id="vp-1", voronka_profile_id="vp-1"))
+    r2 = post_enrollment(lms.client, payload)
+    assert r2.status_code == 200, r2.text
     with lms.db() as db:
-        learner = db.scalar(select(Learner).where(Learner.email == "anna@example.ru"))
-        assert learner is not None
-        assert learner.subject.startswith("email:")
+        grant = db.get(AccessGrantRow, "evt-email-sub-1")
+        assert grant.keycloak_sub == "subject-one"
+
+
+def test_enrollment_rejects_malformed_numeric_fields(lms):
+    bad = base_body(event_id="evt-bad-rev", revision="invalid")
+    r = post_enrollment(lms.client, bad)
+    assert r.status_code == 422
+    assert "revision" in r.text
+    bad2 = base_body(event_id="evt-bad-schema", schema_version="nope")
+    assert post_enrollment(lms.client, bad2).status_code == 422
+
+
+def test_enrollment_rejects_oversized_commerce_product_id(lms):
+    payload = base_body(event_id="evt-long-prod", commerce_product_id="p" * 37)
+    r = post_enrollment(lms.client, payload)
+    assert r.status_code == 422

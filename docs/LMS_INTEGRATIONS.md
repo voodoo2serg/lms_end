@@ -42,7 +42,7 @@ Dual-read aliases:
 | `action` `grant`\|`desired`\|`revoke` | `revoke: true`, `kind`/`type` `enrollment.desired`\|`enrollment.revoked` |
 | `course_id` | `resource` (maps to course_id) |
 | `event_id` | `idempotency_key` |
-| `keycloak_sub` | synthesized from `email` / `voronka_profile_id` when sub absent |
+| `keycloak_sub` | if absent, resolve existing learner by `email` / `voronka_profile_id`; otherwise 422 (no fake subjects) |
 | extra envelope fields (`type`, `kind`, `source`, …) | ignored after normalize |
 
 Rules:

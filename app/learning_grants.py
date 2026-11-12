@@ -34,12 +34,13 @@ class EnrollmentBody(BaseModel):
     schema_version: int = Field(default=SCHEMA_VERSION, ge=1, le=1)
     event_id: str = Field(min_length=8, max_length=80)
     action: str = Field(pattern=r"^(desired|grant|revoke)$")
-    keycloak_sub: str = Field(min_length=1, max_length=200)
+    # Optional on the wire; resolved to a real Keycloak subject before apply.
+    keycloak_sub: str | None = Field(default=None, max_length=200)
     voronka_profile_id: str | None = Field(default=None, max_length=36)
     email: str | None = Field(default=None, max_length=250)
     name: str | None = Field(default=None, max_length=200)
     course_id: str | None = Field(default=None, max_length=80)
-    commerce_product_id: str | None = Field(default=None, max_length=80)
+    commerce_product_id: str | None = Field(default=None, max_length=36)
     capability: str = Field(default=CANONICAL_CAPABILITY, max_length=40)
     min_paid_percent: int = Field(default=100, ge=0, le=100)
     expires_at: datetime | None = None
@@ -116,13 +117,13 @@ def _verify_m2m(request_headers: dict[str, str], raw_body: bytes) -> None:
     raise HTTPException(401, "Invalid token or signature")
 
 
-def _as_int(value: Any, default: int) -> int:
+def _as_int(value: Any, default: int, *, field: str) -> int:
     if value is None or value == "":
         return default
     try:
         return int(value)
-    except (TypeError, ValueError):
-        return default
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, f"{field} must be an integer") from exc
 
 
 def normalize_enrollment_payload(raw: dict[str, Any]) -> dict[str, Any]:
@@ -158,18 +159,13 @@ def normalize_enrollment_payload(raw: dict[str, Any]) -> dict[str, Any]:
     if not course_id and not commerce_product_id and resource:
         commerce_product_id = resource
 
-    keycloak_sub = str(raw.get("keycloak_sub") or "").strip()
+    keycloak_sub = str(raw.get("keycloak_sub") or "").strip() or None
     email = str(raw.get("email") or "").strip() or None
     voronka_profile_id = str(raw.get("voronka_profile_id") or "").strip() or None
-    if not keycloak_sub:
-        if email:
-            keycloak_sub = f"email:{email.lower()}"
-        elif voronka_profile_id:
-            keycloak_sub = f"vp:{voronka_profile_id}"
-        else:
-            raise HTTPException(422, "keycloak_sub or email or voronka_profile_id required")
+    if not keycloak_sub and not email and not voronka_profile_id:
+        raise HTTPException(422, "keycloak_sub or email or voronka_profile_id required")
 
-    schema_version = _as_int(raw.get("schema_version"), SCHEMA_VERSION)
+    schema_version = _as_int(raw.get("schema_version"), SCHEMA_VERSION, field="schema_version")
     capability = str(raw.get("capability") or CANONICAL_CAPABILITY).strip() or CANONICAL_CAPABILITY
 
     return {
@@ -183,10 +179,33 @@ def normalize_enrollment_payload(raw: dict[str, Any]) -> dict[str, Any]:
         "course_id": course_id,
         "commerce_product_id": commerce_product_id,
         "capability": capability,
-        "min_paid_percent": _as_int(raw.get("min_paid_percent"), 100),
+        "min_paid_percent": _as_int(raw.get("min_paid_percent"), 100, field="min_paid_percent"),
         "expires_at": raw.get("expires_at"),
-        "revision": _as_int(raw.get("revision"), 1),
+        "revision": _as_int(raw.get("revision"), 1, field="revision"),
     }
+
+
+def resolve_keycloak_sub(db, body: EnrollmentBody) -> str:
+    """Use real Keycloak sub only — never synthesize from email/profile.
+
+    When the wire payload omits keycloak_sub, resolve an existing learner by
+    voronka_profile_id or email. Otherwise defer with 422 until SSO identity exists.
+    """
+    if body.keycloak_sub:
+        return body.keycloak_sub
+    learner = None
+    if body.voronka_profile_id:
+        learner = db.scalar(select(Learner).where(
+            (Learner.voronka_profile_id == body.voronka_profile_id)
+            | (Learner.profile_id == body.voronka_profile_id)))
+    if not learner and body.email:
+        learner = db.scalar(select(Learner).where(Learner.email == body.email.strip().lower()))
+    if learner and learner.subject and not learner.subject.startswith(("email:", "vp:")):
+        return learner.subject
+    raise HTTPException(
+        422,
+        "keycloak_sub required until an existing learner can be resolved by email/voronka_profile_id",
+    )
 
 
 def resolve_course(db, course_id: str | None, commerce_product_id: str | None) -> Course:
@@ -289,11 +308,12 @@ async def enrollment_sync(
         if prior:
             return {"ok": True, "idempotent": True, "event_id": body.event_id}
 
+        keycloak_sub = resolve_keycloak_sub(db, body)
         course = resolve_course(db, body.course_id, body.commerce_product_id)
-        current = latest_grant(db, body.keycloak_sub, course.id)
+        current = latest_grant(db, keycloak_sub, course.id)
         if current and current.revision > body.revision:
             db.add(AccessGrantRow(
-                id=body.event_id, keycloak_sub=body.keycloak_sub,
+                id=body.event_id, keycloak_sub=keycloak_sub,
                 voronka_profile_id=body.voronka_profile_id, course_id=course.id,
                 commerce_product_id=body.commerce_product_id or course.commerce_product_id or course.product_id,
                 capability=CANONICAL_CAPABILITY, min_paid_percent=body.min_paid_percent,
@@ -303,12 +323,12 @@ async def enrollment_sync(
             return {"ok": True, "ignored": "stale_revision", "event_id": body.event_id}
 
         learner = ensure_learner_external(
-            db, subject=body.keycloak_sub, email=body.email or f"{body.keycloak_sub}@learners.local",
-            name=body.name or body.keycloak_sub, voronka_profile_id=body.voronka_profile_id)
+            db, subject=keycloak_sub, email=body.email or f"{keycloak_sub}@learners.local",
+            name=body.name or keycloak_sub, voronka_profile_id=body.voronka_profile_id)
 
         revoked = body.action == "revoke"
         row = AccessGrantRow(
-            id=body.event_id, keycloak_sub=body.keycloak_sub,
+            id=body.event_id, keycloak_sub=keycloak_sub,
             voronka_profile_id=body.voronka_profile_id, course_id=course.id,
             commerce_product_id=body.commerce_product_id or course.commerce_product_id or course.product_id,
             capability=CANONICAL_CAPABILITY, min_paid_percent=body.min_paid_percent,

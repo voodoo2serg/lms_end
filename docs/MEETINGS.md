@@ -15,6 +15,8 @@
 
 ## HTTP (stubs, in-memory)
 
+**Auth:** `Authorization: Bearer $MEETINGS_API_TOKEN` (or `VORONKA_LMS_TOKEN` / `LMS_END_TOKEN`). Mutations require staff-equivalent M2M.
+
 | Method | Path |
 |--------|------|
 | GET | `/api/meetings/meta` |
@@ -29,4 +31,8 @@ Outbound event names (dual `type`+`kind`): `meeting.scheduled`, `session.start`,
 
 Idempotency: `event_id` / `idempotency_key`. Sparks are feedback moments — **not** OpenOlat grades.
 
-Env: `BBB_MEDIA_PLANE_HOST` (optional documentation of future host).
+Env: `MEETINGS_API_TOKEN`, `BBB_MEDIA_PLANE_HOST` (optional future host).
+
+## Portal BFF (same store)
+
+Browser → `portal` `/api/meetings/*` only (cookie HMAC session). Portal either uses local store or delegates to this adapter with Bearer when `LMS_END_URL` is set. Nginx must not split questions/attendance to a different upstream than meetings.

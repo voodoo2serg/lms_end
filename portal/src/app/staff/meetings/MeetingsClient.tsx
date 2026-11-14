@@ -20,7 +20,7 @@ export function MeetingsClient() {
 
   const loadQuestions = useCallback(async (id: string) => {
     if (!id) return;
-    const res = await fetch(`/api/questions?meetingId=${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/meetings/${encodeURIComponent(id)}/questions`);
     const data = (await res.json()) as { questions: Question[] };
     setQuestions(data.questions || []);
   }, []);
@@ -64,10 +64,10 @@ export function MeetingsClient() {
   async function ask(e: React.FormEvent) {
     e.preventDefault();
     if (!selected) return;
-    await fetch("/api/questions", {
+    await fetch(`/api/meetings/${encodeURIComponent(selected)}/questions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ meetingId: selected, body: qBody }),
+      body: JSON.stringify({ body: qBody }),
     });
     setQBody("");
     await loadQuestions(selected);
@@ -76,10 +76,10 @@ export function MeetingsClient() {
   async function spark() {
     if (!selected) return;
     const eventId = `spark_${Date.now()}`;
-    const res = await fetch("/api/sparks", {
+    const res = await fetch(`/api/meetings/${encodeURIComponent(selected)}/sparks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ meetingId: selected, eventId, note: "огонёк" }),
+      body: JSON.stringify({ eventId, note: "огонёк" }),
     });
     const data = await res.json();
     setMsg(data.duplicate ? "дубликат eventId" : "feedback.spark записан");

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
-import { setSession } from "@/lib/store";
+import { backendSession } from "@/lib/meetings-backend";
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const user = await currentUser();
@@ -12,17 +12,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (body.action !== "start" && body.action !== "end") {
     return NextResponse.json({ error: "action=start|end" }, { status: 422 });
   }
-  const meeting = setSession(id, body.action);
-  if (!meeting) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({
-    meeting,
-    event: {
-      type: body.action === "start" ? "session.start" : "session.end",
-      kind: body.action === "start" ? "session.start" : "session.end",
-      meeting_id: meeting.id,
-      externalMeetingId: meeting.externalMeetingId,
-      at: body.action === "start" ? meeting.sessionStartedAt : meeting.sessionEndedAt,
-    },
-    note: "BBB media plane не на текущем VPS — joinUrl stub/external only.",
-  });
+  try {
+    const result = await backendSession(id, body.action);
+    if (!result) return NextResponse.json({ error: "not found" }, { status: 404 });
+    return NextResponse.json(result);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "backend error" },
+      { status: 502 },
+    );
+  }
 }

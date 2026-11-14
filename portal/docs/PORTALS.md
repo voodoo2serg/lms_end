@@ -23,9 +23,13 @@
 
 | Var | Meaning |
 |-----|---------|
-| `LMS_END_URL` | Base URL adapter; пусто = stub |
+| `PORTAL_SESSION_SECRET` | HMAC for signed session cookie (≥16; required in production) |
+| `LMS_END_URL` | Base URL adapter; пусто = local meeting store |
+| `LMS_END_TOKEN` / `MEETINGS_API_TOKEN` | Bearer to adapter `/api/meetings` |
 | `BBB_MEDIA_PLANE_HOST` | Future external BBB; **не** текущий VPS |
 | `STUB_*` | Dev stub login |
+
+Meeting UI calls only `/api/meetings/...` (questions/attendance/sparks nested) so one store.
 
 ## Анти-scope
 

@@ -18,8 +18,13 @@ export function AttendanceClient() {
     setMeetings(m.meetings || []);
     if (!meetingId && m.meetings?.[0]) setMeetingId(m.meetings[0].id);
     const id = mid || meetingId || m.meetings?.[0]?.id;
-    const q = id ? `?meetingId=${encodeURIComponent(id)}` : "";
-    const a = await fetch(`/api/attendance${q}`).then((r) => r.json());
+    if (!id) {
+      setRows([]);
+      return;
+    }
+    const a = await fetch(`/api/meetings/${encodeURIComponent(id)}/attendance`).then((r) =>
+      r.json(),
+    );
     setRows(a.attendance || []);
   }
 
@@ -31,11 +36,10 @@ export function AttendanceClient() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const eventId = `att_${meetingId}_${subject}_${duration}`;
-    const res = await fetch("/api/attendance", {
+    const res = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/attendance`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        meetingId,
         subject,
         email,
         durationSeconds: duration,

@@ -2,15 +2,20 @@
 
 In-memory journal for join metadata, Q&A refs, attendance and feedback.spark events.
 Money stays in voronka; OpenOlat remains academic SoR for grades.
+
+Auth: Bearer MEETINGS_API_TOKEN / VORONKA_LMS_TOKEN / LMS_END_TOKEN, or HMAC
+X-Lms-*/X-Voronka-* (same style as enrollment M2M). Mutations require auth; M2M
+token counts as staff for stub service calls from the portal BFF.
 """
 from __future__ import annotations
 
+import hmac
 import os
 import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/meetings", tags=["meetings-stub"])
@@ -23,9 +28,35 @@ _STORE: dict[str, Any] = {
     "seen_events": set(),
 }
 
-
 def _uid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
+
+
+def _meetings_token() -> str:
+    return (
+        os.getenv("MEETINGS_API_TOKEN")
+        or os.getenv("LMS_END_TOKEN")
+        or os.getenv("VORONKA_LMS_TOKEN")
+        or ""
+    ).strip()
+
+
+def require_meetings_auth(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """M2M Bearer for all meeting routes (portal BFF / tooling)."""
+    token = _meetings_token()
+    if not token:
+        raise HTTPException(503, "MEETINGS_API_TOKEN or VORONKA_LMS_TOKEN required")
+    auth = authorization or ""
+    if auth.startswith("Bearer ") and hmac.compare_digest(auth[7:], token):
+        # Trusted service identity from portal BFF after cookie/staff checks.
+        return {"auth": "m2m", "role": "staff", "sub": "m2m"}
+    raise HTTPException(401, "Bearer MEETINGS_API_TOKEN / VORONKA_LMS_TOKEN required")
+
+
+def require_staff(actor: dict[str, Any] = Depends(require_meetings_auth)) -> dict[str, Any]:
+    if actor.get("role") != "staff":
+        raise HTTPException(403, "Staff required for meeting mutations")
+    return actor
 
 
 class MeetingIn(BaseModel):
@@ -64,7 +95,7 @@ class SparkIn(BaseModel):
 
 
 @router.get("/meta")
-def meeting_meta():
+def meeting_meta(_actor: dict[str, Any] = Depends(require_meetings_auth)):
     return {
         "bbb_installed": False,
         "media_plane_host": os.getenv("BBB_MEDIA_PLANE_HOST") or None,
@@ -92,12 +123,12 @@ def meeting_meta():
 
 
 @router.get("")
-def list_meetings():
+def list_meetings(_actor: dict[str, Any] = Depends(require_meetings_auth)):
     return {"meetings": list(_STORE["meetings"].values())}
 
 
 @router.post("", status_code=201)
-def create_meeting(body: MeetingIn):
+def create_meeting(body: MeetingIn, _actor: dict[str, Any] = Depends(require_staff)):
     mid = _uid("mtg")
     row = {
         "id": mid,
@@ -121,7 +152,7 @@ def create_meeting(body: MeetingIn):
 
 
 @router.get("/{meeting_id}")
-def get_meeting(meeting_id: str):
+def get_meeting(meeting_id: str, _actor: dict[str, Any] = Depends(require_meetings_auth)):
     row = _STORE["meetings"].get(meeting_id)
     if not row:
         raise HTTPException(404, "meeting not found")
@@ -129,7 +160,7 @@ def get_meeting(meeting_id: str):
 
 
 @router.post("/{meeting_id}/session")
-def session(meeting_id: str, body: SessionIn):
+def session(meeting_id: str, body: SessionIn, _actor: dict[str, Any] = Depends(require_staff)):
     row = _STORE["meetings"].get(meeting_id)
     if not row:
         raise HTTPException(404, "meeting not found")
@@ -161,7 +192,7 @@ def session(meeting_id: str, body: SessionIn):
 
 
 @router.post("/{meeting_id}/questions", status_code=201)
-def add_question(meeting_id: str, body: QuestionIn):
+def add_question(meeting_id: str, body: QuestionIn, _actor: dict[str, Any] = Depends(require_meetings_auth)):
     if meeting_id not in _STORE["meetings"]:
         raise HTTPException(404, "meeting not found")
     q = {
@@ -177,7 +208,7 @@ def add_question(meeting_id: str, body: QuestionIn):
 
 
 @router.post("/{meeting_id}/attendance", status_code=201)
-def attendance(meeting_id: str, body: AttendanceIn):
+def attendance(meeting_id: str, body: AttendanceIn, _actor: dict[str, Any] = Depends(require_staff)):
     if meeting_id not in _STORE["meetings"]:
         raise HTTPException(404, "meeting not found")
     if body.event_id in _STORE["seen_events"]:
@@ -204,7 +235,7 @@ def attendance(meeting_id: str, body: AttendanceIn):
 
 
 @router.get("/{meeting_id}/attendance")
-def list_attendance(meeting_id: str):
+def list_attendance(meeting_id: str, _actor: dict[str, Any] = Depends(require_meetings_auth)):
     if meeting_id not in _STORE["meetings"]:
         raise HTTPException(404, "meeting not found")
     rows = [r for r in _STORE["attendance"].values() if r["meeting_id"] == meeting_id]
@@ -212,7 +243,7 @@ def list_attendance(meeting_id: str):
 
 
 @router.post("/{meeting_id}/sparks", status_code=201)
-def spark(meeting_id: str, body: SparkIn):
+def spark(meeting_id: str, body: SparkIn, _actor: dict[str, Any] = Depends(require_meetings_auth)):
     if meeting_id not in _STORE["meetings"]:
         raise HTTPException(404, "meeting not found")
     if body.event_id in _STORE["seen_events"]:

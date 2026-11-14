@@ -39,8 +39,9 @@
 |--------|------|
 | GET/POST | `/api/meetings` |
 | POST | `/api/meetings/{id}/session` `{action: start\|end}` |
-| GET/POST | `/api/questions` |
-| GET/POST | `/api/attendance` |
-| GET/POST | `/api/sparks` |
+| GET/POST | `/api/meetings/{id}/questions` |
+| GET/POST | `/api/meetings/{id}/attendance` |
+| GET/POST | `/api/meetings/{id}/sparks` |
 
-Зеркальные stub-роуты в adapter — см. [`../../docs/MEETINGS.md`](../../docs/MEETINGS.md).
+Один store: local или adapter via `LMS_END_URL` + Bearer. Cookie session = HMAC (`PORTAL_SESSION_SECRET`).  
+Adapter stubs — [`../../docs/MEETINGS.md`](../../docs/MEETINGS.md).

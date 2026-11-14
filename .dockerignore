@@ -12,6 +12,10 @@ web/out
 app/crm_static
 .venv
 site
+portal/node_modules
+portal/.next
+.cache
+*.war
 
 .test-tmp
 deploy/generated

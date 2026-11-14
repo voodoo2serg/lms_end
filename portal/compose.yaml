@@ -1,0 +1,26 @@
+services:
+  portal:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:3040:3040"
+    volumes:
+      - portal-data:/app/data
+    networks:
+      - default
+      - lms_net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch(\"http://127.0.0.1:3040/\").then(r=>process.exit(r.ok||r.status===307||r.status===302?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  portal-data:
+
+networks:
+  lms_net:
+    external: true
+    name: lms_end_default

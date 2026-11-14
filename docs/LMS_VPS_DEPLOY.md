@@ -39,13 +39,15 @@ docker compose -f compose.lms.yaml up -d --build
 Portal wiring after adapter healthy:
 
 ```bash
-# portal/.env or compose env
-LMS_END_URL=http://127.0.0.1:18083
+# portal/compose.yaml must attach to external network lms_end_default (see portal/compose.yaml).
+# Host 127.0.0.1:18083 is loopback-only and unreachable from the portal container.
+LMS_END_URL=http://api:8000
 LMS_END_TOKEN=<same as MEETINGS_API_TOKEN / VORONKA_LMS_TOKEN>
 ```
 
 Nginx examples: `deploy/lms/nginx-lms.solo-pr.ru.conf` (lms + auth + learn).  
-DNS required for public TLS: `auth.solo-pr.ru`, `learn.solo-pr.ru` A → VPS (in addition to existing `lms.solo-pr.ru`).
+DNS required for public TLS on canonical hosts: `auth.solo-pr.ru`, `learn.solo-pr.ru` A → VPS.  
+Until DNS: temporary HTTP sslip `auth.213.171.9.30.sslip.io` / `learn.213.171.9.30.sslip.io` (+ loopback `:18081`/`:18082`).
 
 ## Upgrade note (existing `.env`)
 

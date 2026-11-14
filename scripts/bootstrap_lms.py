@@ -47,6 +47,7 @@ def main():
         ):
             values[name] = secrets.token_urlsafe(36)
         site = args.site_origin or ("https://" + args.domain)
+        meetings_token = secrets.token_urlsafe(36)
         values.update(
             ACCESS_AUTHORITY="external",
             SITE_ORIGIN=site,
@@ -54,9 +55,12 @@ def main():
             API_DOMAIN="api." + args.domain,
             AUTH_DOMAIN="auth." + args.domain,
             LEARN_DOMAIN="learn." + args.domain,
+            LMS_PORTAL_ORIGIN="https://lms." + args.domain,
             OPENOLAT_URL="https://learn." + args.domain,
             OIDC_ISSUER="https://auth." + args.domain + "/realms/solo-pr",
-            LEARNING_API_URL="https://api." + args.domain,
+            LEARNING_API_URL="https://lms." + args.domain + "/adapter",
+            # Co-host with voronka: adapter must not bind 18080.
+            LMS_API_PORT="18083",
             PLATFORM_PROJECT_ID=args.project_id or str(uuid4()),
             KEYCLOAK_VERSION=args.keycloak_version,
             OPENOLAT_WAR_URL=args.openolat_war_url,
@@ -64,6 +68,7 @@ def main():
             DATABASE_URL="postgresql+psycopg://lms:" + values["LMS_ADAPTER_DB_PASSWORD"]
             + "@learning-db:5432/lms_adapter",
             REDIS_URL="redis://redis:6379/0",
+            MEETINGS_API_TOKEN=meetings_token,
             # Stub so accidental legacy imports do not crash; LMS-only does not use Telegram owner.
             OWNER_TELEGRAM_ID="-1",
             POSTGRES_PASSWORD=secrets.token_urlsafe(24),

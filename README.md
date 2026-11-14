@@ -42,16 +42,20 @@ CMS и старый community-кабинет пока используют су�
 git clone https://github.com/voodoo2serg/lms_end.git
 cd lms_end
 python3 -m scripts.bootstrap_lms --domain solo-pr.ru \
-  --keycloak-version VERIFIED_VERSION \
-  --openolat-war-url https://OFFICIAL_RELEASE_URL/openolat.war \
-  --openolat-war-sha256 VERIFIED_SHA256_64CHARS
+  --keycloak-version 26.8.2 \
+  --openolat-war-url https://www.openolat.com/releases/openolat_2112.war \
+  --openolat-war-sha256 4acc481777d1fad134bbd7ed67797b0ca8bc375ade1533398d3f97b8441f53ab
 # Creates .env (if missing) and deploy/generated/realm.json before Keycloak starts.
 docker compose -f compose.lms.yaml config --quiet
 docker compose -f compose.lms.yaml up -d --build
 ```
 
+**Shared VPS with voronka:** adapter listens on **`127.0.0.1:18083`** (`LMS_API_PORT`), not `18080`.  
+Keycloak `:18081` · OpenOlat `:18082` · portal `:3040`. See [`docs/LMS_VPS_DEPLOY.md`](docs/LMS_VPS_DEPLOY.md).
+
 `ACCESS_AUTHORITY=external` by default. Set `VORONKA_LMS_TOKEN` / completion URL after bootstrap.  
-Edge: [`deploy/lms/nginx-lms.conf`](deploy/lms/nginx-lms.conf). Backup: [`scripts/backup_lms.sh`](scripts/backup_lms.sh) + [`docs/LMS_BACKUP.md`](docs/LMS_BACKUP.md).
+Edge: [`deploy/lms/nginx-lms.conf`](deploy/lms/nginx-lms.conf) · solo-pr: [`deploy/lms/nginx-lms.solo-pr.ru.conf`](deploy/lms/nginx-lms.solo-pr.ru.conf).  
+Backup: [`scripts/backup_lms.sh`](scripts/backup_lms.sh) + [`docs/LMS_BACKUP.md`](docs/LMS_BACKUP.md).
 
 ### Legacy full platform (frozen)
 

@@ -69,7 +69,8 @@ services:
       DATABASE_URL: postgresql+psycopg://lms:${LMS_ADAPTER_DB_PASSWORD}@learning-db:5432/lms_adapter
       REDIS_URL: redis://redis:6379/0
     command: python -m uvicorn app.lms_app:app --host 0.0.0.0 --port 8000
-    ports: ["127.0.0.1:${LMS_API_PORT:-18080}:8000"]
+    # 18083: co-host with voronka (voronka owns 18080). Do not default back to 18080.
+    ports: ["127.0.0.1:${LMS_API_PORT:-18083}:8000"]
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_started}

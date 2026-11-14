@@ -13,8 +13,9 @@
 1. **Сейчас / до LMS-20 cutover:** stub HTML или этот portal в stub-режиме (`LMS_END_URL` пуст) с честным empty-state «LMS выключен».
 2. **После подъёма `compose.lms.yaml`:** nginx переключает upstream:
    - `/` → portal (этот сервис, порт 3040) **или** OpenOlat learn UI
-   - `/api/integrations/`, `/api/learning/`, `/health` → lms_end adapter (`18080`)
-   - `auth.solo-pr.ru` → Keycloak (отдельный vhost)
+   - `/api/integrations/`, `/api/learning/`, `/adapter/health` → lms_end adapter (`18083`; **не** `18080` — voronka)
+   - `auth.solo-pr.ru` → Keycloak `:18081` (отдельный vhost)
+   - `learn.solo-pr.ru` → OpenOlat `:18082`
 3. Cookie portal — **host-only** (`lms_portal_session`), без `Domain=.solo-pr.ru`.
 4. Staff chrome: CMS · CRM · Воронка · LMS (только staff).
 5. Публичное «Войти» ученика остаётся на `solo-pr.ru`; deep-link сюда / OpenOlat.

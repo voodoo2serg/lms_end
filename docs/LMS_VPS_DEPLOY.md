@@ -45,9 +45,22 @@ LMS_END_URL=http://api:8000
 LMS_END_TOKEN=<same as MEETINGS_API_TOKEN / VORONKA_LMS_TOKEN>
 ```
 
-Nginx examples: `deploy/lms/nginx-lms.solo-pr.ru.conf` (lms + auth + learn).  
+Nginx examples: `deploy/lms/nginx-lms.solo-pr.ru.conf` (lms + auth + learn; HTTP templates — certbot adds TLS on the host).  
 DNS required for public TLS on canonical hosts: `auth.solo-pr.ru`, `learn.solo-pr.ru` A → VPS.  
 Until DNS: temporary HTTP sslip `auth.213.171.9.30.sslip.io` / `learn.213.171.9.30.sslip.io` (+ loopback `:18081`/`:18082`).
+
+### TLS after DNS (host)
+
+```bash
+# Confirm public resolvers (not only local stub):
+dig @1.1.1.1 +short auth.solo-pr.ru A   # → VPS IP
+dig @1.1.1.1 +short learn.solo-pr.ru A
+certbot --nginx -d auth.solo-pr.ru -d learn.solo-pr.ru --redirect
+# Expect issuer https://auth.solo-pr.ru/realms/solo-pr and
+# https://learn.solo-pr.ru/ → Keycloak OIDC (client solo-openolat).
+```
+
+Live (2026-11-14): LE cert `/etc/letsencrypt/live/auth.solo-pr.ru/` (SAN auth+learn), expires 2027-02-12.
 
 ## Upgrade note (existing `.env`)
 

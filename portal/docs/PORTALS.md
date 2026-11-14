@@ -5,8 +5,8 @@
 | **Host** | `https://lms.solo-pr.ru` |
 | **Repo** | `voodoo2serg/lms_end` → `portal/` |
 | **SoR learning** | `voodoo2serg/lms_end` (OpenOlat + Keycloak + adapter) |
-| **DNS/TLS** | ✅ (2026-11-14) A → `213.171.9.30` · LE |
-| **VPS deploy this phase** | **Нет** — только код + nginx example |
+| **DNS/TLS** | ✅ `lms` · ✅ `auth`/`learn` LE (2026-11-14) A → `213.171.9.30` |
+| **VPS deploy** | ✅ compose.lms + portal wired; see `docs/LMS_VPS_DEPLOY.md` |
 
 ## Поведение host (целевое)
 

@@ -47,6 +47,14 @@ LMS_END_TOKEN=<same as MEETINGS_API_TOKEN / VORONKA_LMS_TOKEN>
 Nginx examples: `deploy/lms/nginx-lms.solo-pr.ru.conf` (lms + auth + learn).  
 DNS required for public TLS: `auth.solo-pr.ru`, `learn.solo-pr.ru` A → VPS (in addition to existing `lms.solo-pr.ru`).
 
+## Upgrade note (existing `.env`)
+
+`bootstrap_lms` does **not** rewrite secrets, but **does** migrate:
+- `LMS_API_PORT=18080` → `18083` (voronka co-host)
+- `LEARNING_API_URL=…/adapter` → strip `/adapter` suffix
+
+Re-run bootstrap after pull, or set those keys manually before `compose up`.
+
 ## Smoke
 
 | Check | Expect |
@@ -55,8 +63,10 @@ DNS required for public TLS: `auth.solo-pr.ru`, `learn.solo-pr.ru` A → VPS (in
 | `curl -sS http://127.0.0.1:18083/health` | adapter `ok` or `degraded` |
 | `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/` | Keycloak up |
 | `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18082/` | OpenOlat UI |
-| `https://lms.solo-pr.ru/api/health` | portal; `adapter.configured=true` when wired |
-| `https://auth.solo-pr.ru` | Keycloak login (needs DNS+LE) |
+| `https://lms.solo-pr.ru/api/health` | portal JSON; nested `adapter.configured` true when `LMS_END_URL` set |
+| `https://lms.solo-pr.ru/api/status` | launch_state + adapter probe |
+| `https://lms.solo-pr.ru/adapter/health` | direct adapter (nginx rewrite) |
+| `https://auth.solo-pr.ru` | Keycloak login (needs DNS+LE; else sslip/loopback) |
 
 ## Anti-scope
 

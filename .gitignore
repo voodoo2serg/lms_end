@@ -16,6 +16,11 @@ site/.next/
 site/data/
 site/.openai/
 site/*.tsbuildinfo
+portal/node_modules/
+portal/.next/
+portal/out/
+portal/*.tsbuildinfo
+portal/.env.local
 
 .test-tmp/
 deploy/generated/

@@ -14,6 +14,7 @@
 - Canonical capability `course.view`; checkout в LMS отключён при `ACCESS_AUTHORITY=external` (410).
 - Outbound `learning.completed` → voronka; backup/enforcement/ownership docs.
 - Vendored `web/` + `site/` + CRM funnel modules — **frozen archive** (не runtime path для home LMS).
+- **`portal/`** — thin staff/learner UI for `lms.solo-pr.ru` + BBB/meeting stubs (phase 4; no VPS deploy, no BBB install). See [`portal/README.md`](portal/README.md) · [`docs/MEETINGS.md`](docs/MEETINGS.md) · [`deploy/lms/nginx-lms.solo-pr.ru.conf`](deploy/lms/nginx-lms.solo-pr.ru.conf).
 
 ## Границы готовности
 

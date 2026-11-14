@@ -9,10 +9,12 @@ from sqlalchemy import select
 from app.db import Session
 from app.learning_api import router as learning_router
 from app.learning_grants import router as grants_router
+from app.meeting_stubs import router as meetings_router
 
 app = FastAPI(title="LMS Adapter", docs_url=None, redoc_url=None)
 app.include_router(learning_router)
 app.include_router(grants_router)
+app.include_router(meetings_router)
 
 
 @app.get("/health")

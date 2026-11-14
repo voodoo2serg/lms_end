@@ -49,7 +49,8 @@ def main():
         'roles':{'client':{'solo-api':[{'name':x} for x in ['owner','manager','editor','teacher','student']]}}
     }
     out=Path('deploy/generated');out.mkdir(parents=True,exist_ok=True)
-    p=out/'realm.json';p.write_text(json.dumps(realm,ensure_ascii=False,indent=2));p.chmod(0o600)
+    # 0644 so the Keycloak container (non-root) can read the import mount.
+    p=out/'realm.json';p.write_text(json.dumps(realm,ensure_ascii=False,indent=2));p.chmod(0o644)
     print('Realm configuration written. Configure SMTP and assign the owner role in Keycloak before launch.')
 
 if __name__=='__main__':main()

@@ -85,3 +85,10 @@ Certificate issuance policy (full payment + academic) stays **commerce-side** in
 ## Handoff
 
 solo_pr redeem `POST /api/integrations/lms/handoff` (Block 1) is site-owned. LMS launch remains `POST /api/learning/courses/{id}/launch` after enrollment `state=active`.
+
+## Meetings / BBB stubs (LMS-21 / LMS-22)
+
+Thin in-memory routes under `/api/meetings/*` — see [`MEETINGS.md`](./MEETINGS.md).  
+**Do not** install BBB on the current VPS. Portal UI: sibling repo `LMS_for_edu` (`lms.solo-pr.ru`).  
+Events: `attendance.recorded`, `feedback.spark` (idempotent) for CRM RO consumers.
+

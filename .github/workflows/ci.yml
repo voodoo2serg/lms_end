@@ -144,6 +144,24 @@ jobs:
       - run: npm run --prefix web build
       - run: npm run --prefix web typecheck
 
+  # Phase 4: thin LMS portal for lms.solo-pr.ru (no BBB / no VPS deploy).
+  portal:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   site:
     # Vendored site/ is a frozen archive (LMS-1); keep a smoke job but tolerate
     # Next.js SQLite "database is locked" flakes during parallel page collection.

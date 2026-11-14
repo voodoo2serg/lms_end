@@ -1,13 +1,13 @@
 # Meetings / BBB stubs (LMS-21, LMS-22)
 
-**BBB is not installed on the current VPS** (`213.171.9.30`). These routes define the join/Q&A/attendance/spark contract for the thin portal (`LMS_for_edu`) and future external media plane.
+**BBB is not installed on the current VPS** (`213.171.9.30`). These routes define the join/Q&A/attendance/spark contract for the thin portal (`portal/` in this repo) and future external media plane.
 
 ## Placement
 
 | Concern | Owner |
 |---------|-------|
 | Join URL / academic attendance journal | **lms_end** (this adapter) |
-| Staff/learner UI | `LMS_for_edu` → `lms.solo-pr.ru` |
+| Staff/learner UI | `portal/` → `lms.solo-pr.ru` |
 | Event announce | solo_pr CMS / ЛК |
 | Reminders | voronka (`meeting_reminder`) |
 | Money / AccessGrant | voronka CRM |

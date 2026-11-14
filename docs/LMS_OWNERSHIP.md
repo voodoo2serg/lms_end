@@ -16,7 +16,7 @@ Repositories are **not** merged. Databases are **not** shared across repos.
 | Path | Status | Plan |
 |------|--------|------|
 | `app/learning_*.py`, `app/lms_app.py`, `app/learning_grants.py` | **Active LMS runtime** | Keep and extend |
-| `deploy/openolat/`, `deploy/lms/`, `compose.lms.yaml` | **Active LMS ops** | Keep |
+| `deploy/openolat/`, `deploy/lms/`, `compose.lms.yaml` | **Active LMS ops** | Keep · adapter port **18083** on shared VPS (see `LMS_VPS_DEPLOY.md`) |
 | `app/` CRM/funnel modules (`crm_*`, `worker.py`, `channels.py`, …) | **Frozen archive** | Do not extend for LMS; voronka is SoR. Present only for transitional `ACCESS_AUTHORITY=legacy_crm` and historical CI |
 | `web/` (CRM UI) | **Frozen archive** | Money/grants UI belongs in voronka; capability label fixed to `course.view` only for LMS-4 |
 | `site/` (solo_pr snapshot) | **Frozen archive** | Live site lives in solo_pr; consume LMS via env (`LEARNING_API_URL`, Keycloak) |

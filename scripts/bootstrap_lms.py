@@ -1,7 +1,9 @@
 """LMS-only bootstrap: .env + Keycloak realm.json without Voronka CRM stack.
 
-Does not overwrite an existing .env. Generates deploy/generated/realm.json required
-by compose.lms.yaml before Keycloak can start (LMS-5 / Codex P1).
+Does not overwrite an existing .env wholesale. Safe-migrates LMS_API_PORT when
+an older file still has 18080 (voronka co-host clash). Generates
+deploy/generated/realm.json required by compose.lms.yaml before Keycloak can
+start (LMS-5 / Codex P1).
 """
 from __future__ import annotations
 
@@ -12,6 +14,78 @@ from pathlib import Path
 from uuid import uuid4
 
 from scripts.configure_platform import main as render_realm
+
+
+def _load_env_file(env_path: Path) -> None:
+    for line in env_path.read_text().splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key, value)
+
+
+def _set_env_key(lines: list[str], key: str, value: str) -> tuple[list[str], bool]:
+    """Replace or append KEY=value. Returns (new_lines, changed)."""
+    prefix = key + "="
+    out: list[str] = []
+    found = False
+    changed = False
+    for line in lines:
+        if line.startswith(prefix):
+            found = True
+            if line == prefix + value:
+                out.append(line)
+            else:
+                out.append(prefix + value)
+                changed = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(prefix + value)
+        changed = True
+    return out, changed
+
+
+def migrate_existing_env(env_path: Path) -> list[str]:
+    """Safe in-place upgrades for co-host VPS. Never rotates secrets."""
+    notes: list[str] = []
+    lines = env_path.read_text().splitlines()
+    changed = False
+
+    current_port = None
+    for line in lines:
+        if line.startswith("LMS_API_PORT="):
+            current_port = line.split("=", 1)[1].strip()
+            break
+    if current_port is None or current_port == "18080":
+        lines, did = _set_env_key(lines, "LMS_API_PORT", "18083")
+        if did:
+            changed = True
+            notes.append(
+                "migrated LMS_API_PORT → 18083"
+                if current_port == "18080"
+                else "added LMS_API_PORT=18083"
+            )
+
+    # LEARNING_API_URL must be adapter HTTP root (clients append /api/learning/…).
+    # Older bootstraps used …/adapter which 404s for non-meeting paths.
+    for line in list(lines):
+        if line.startswith("LEARNING_API_URL=") and line.rstrip("/").endswith("/adapter"):
+            base = line.split("=", 1)[1].rstrip("/").removesuffix("/adapter")
+            lines, did = _set_env_key(lines, "LEARNING_API_URL", base)
+            if did:
+                changed = True
+                notes.append("migrated LEARNING_API_URL off /adapter suffix")
+            break
+
+    if changed:
+        env_path.write_text("\n".join(lines) + "\n")
+        env_path.chmod(0o600)
+        # Refresh process env for realm render.
+        for line in lines:
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ[key] = value
+    return notes
 
 
 def main():
@@ -28,12 +102,11 @@ def main():
 
     env_path = Path(".env")
     created_env = False
+    migrate_notes: list[str] = []
     if env_path.exists():
-        # Load existing env for realm render; never overwrite.
-        for line in env_path.read_text().splitlines():
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                os.environ.setdefault(key, value)
+        # Load existing env for realm render; migrate only known-safe co-host keys.
+        _load_env_file(env_path)
+        migrate_notes = migrate_existing_env(env_path)
     else:
         values = {
             line.split("=", 1)[0]: line.split("=", 1)[1]
@@ -47,6 +120,7 @@ def main():
         ):
             values[name] = secrets.token_urlsafe(36)
         site = args.site_origin or ("https://" + args.domain)
+        meetings_token = secrets.token_urlsafe(36)
         values.update(
             ACCESS_AUTHORITY="external",
             SITE_ORIGIN=site,
@@ -54,9 +128,13 @@ def main():
             API_DOMAIN="api." + args.domain,
             AUTH_DOMAIN="auth." + args.domain,
             LEARN_DOMAIN="learn." + args.domain,
+            LMS_PORTAL_ORIGIN="https://lms." + args.domain,
             OPENOLAT_URL="https://learn." + args.domain,
             OIDC_ISSUER="https://auth." + args.domain + "/realms/solo-pr",
-            LEARNING_API_URL="https://api." + args.domain,
+            # Root of public host that nginx routes /api/learning|/api/integrations → adapter.
+            LEARNING_API_URL="https://lms." + args.domain,
+            # Co-host with voronka: adapter must not bind 18080.
+            LMS_API_PORT="18083",
             PLATFORM_PROJECT_ID=args.project_id or str(uuid4()),
             KEYCLOAK_VERSION=args.keycloak_version,
             OPENOLAT_WAR_URL=args.openolat_war_url,
@@ -64,6 +142,7 @@ def main():
             DATABASE_URL="postgresql+psycopg://lms:" + values["LMS_ADAPTER_DB_PASSWORD"]
             + "@learning-db:5432/lms_adapter",
             REDIS_URL="redis://redis:6379/0",
+            MEETINGS_API_TOKEN=meetings_token,
             # Stub so accidental legacy imports do not crash; LMS-only does not use Telegram owner.
             OWNER_TELEGRAM_ID="-1",
             POSTGRES_PASSWORD=secrets.token_urlsafe(24),
@@ -84,6 +163,7 @@ def main():
     print(
         "LMS config ready:",
         "created .env;" if created_env else "kept existing .env;",
+        ("migrated: " + ", ".join(migrate_notes) + ";") if migrate_notes else "",
         "wrote", str(realm),
         "— then: docker compose -f compose.lms.yaml up -d --build",
     )

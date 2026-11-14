@@ -6,6 +6,18 @@ from pathlib import Path
 def main():
     site=os.environ['SITE_ORIGIN'].rstrip('/')
     learn=os.environ['OPENOLAT_URL'].rstrip('/')
+    # LMS thin portal host (lms.<domain>); fall back to learn apex sibling.
+    lms_portal = os.environ.get('LMS_PORTAL_ORIGIN', '').rstrip('/')
+    if not lms_portal:
+        # Derive https://lms.example.ru from https://learn.example.ru or SITE_ORIGIN.
+        from urllib.parse import urlparse
+        host = urlparse(learn).hostname or urlparse(site).hostname or 'solo-pr.ru'
+        parts = host.split('.')
+        if parts[0] in ('learn', 'www', 'api', 'auth'):
+            parts[0] = 'lms'
+            lms_portal = 'https://' + '.'.join(parts)
+        else:
+            lms_portal = 'https://lms.' + host
     realm={
         'realm':'solo-pr','enabled':True,'registrationAllowed':True,'verifyEmail':True,
         'loginWithEmailAllowed':True,'duplicateEmailsAllowed':False,'resetPasswordAllowed':True,
@@ -24,6 +36,15 @@ def main():
             {'clientId':'solo-openolat','enabled':True,'protocol':'openid-connect','publicClient':False,
              'secret':os.environ['OPENOLAT_OIDC_SECRET'],'standardFlowEnabled':True,
              'directAccessGrantsEnabled':False,'redirectUris':[learn+'/oauthcallback'], 'webOrigins':[learn]},
+            # LMS portal on lms.<domain> — PKCE public client for future OIDC cutover (stub login until wired).
+            {'clientId':'solo-lms-portal','enabled':True,'protocol':'openid-connect','publicClient':True,
+             'standardFlowEnabled':True,'directAccessGrantsEnabled':False,
+             'redirectUris':[
+                 lms_portal + '/api/auth/callback',
+                 lms_portal + '/*',
+             ],
+             'webOrigins':[lms_portal],
+             'attributes':{'pkce.code.challenge.method':'S256'}},
         ],
         'roles':{'client':{'solo-api':[{'name':x} for x in ['owner','manager','editor','teacher','student']]}}
     }
